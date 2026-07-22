@@ -31,9 +31,19 @@ Decode columns use the clean PREFILL norm per layer as a fixed reference scale.
 Clean and steered generations diverge in token content, so decode is a scale
 reference, not a matched per-token comparison.
 
+PER-LAYER MARGINS. A shared margin is self-limiting: layer l leaves the activation
+at score exactly -m, so layer l+1 sees w.h+b ~ -m and its own score ~ -m + m = 0,
+meaning it barely steers. The window's first layer does nearly all the work. With a
+per-layer schedule {m_l} the driver at each layer is the INCREMENT m_l - m_{l-1},
+not m_l itself: positive increments push further past the boundary, negative ones
+pull back toward refusal. The `score` and `dm` columns make that explicit.
+
 Usage:
     python experiments/steering_magnitude.py --layers 11-18 --margins 0,0.5,1.0,1.5,2.0,2.5
     python experiments/steering_magnitude.py --max_new_tokens 32   # also trace decoding
+    # named per-layer schedules, one value per selected layer:
+    python experiments/steering_magnitude.py --layers 11-18 \
+        --schedules shared=1.5 paper=1.2,2.0,1.8,1.8,2.0,0.9,1.2
 """
 import argparse
 import json
@@ -99,11 +109,43 @@ def clean_reference(model, inputs, n_layers):
             for l in range(n_layers)}
 
 
-def measure(model, layers, selected, probes, margin, beta, inputs, max_new_tokens, clean_norms):
+def build_configs(margins_arg, schedules_arg, selected):
+    """Ordered list of (label, {layer: margin}).
+
+    --margins contributes one uniform schedule per scalar (the original behaviour);
+    --schedules contributes named per-layer vectors, either a single value to
+    broadcast or exactly one value per selected layer.
+    """
+    configs = []
+    for x in (margins_arg or "").replace(" ", "").split(","):
+        if x:
+            m = float(x)
+            configs.append((f"m={m:g}", {l: m for l in selected}))
+
+    for spec in schedules_arg or []:
+        if "=" not in spec:
+            raise ValueError(f"--schedules entry must look like NAME=v1,v2,...: {spec!r}")
+        label, values = spec.split("=", 1)
+        vals = [float(v) for v in values.replace(" ", "").split(",") if v]
+        if len(vals) == 1:
+            vals = vals * len(selected)
+        if len(vals) != len(selected):
+            raise ValueError(
+                f"schedule {label!r} supplies {len(vals)} margins but --layers resolved "
+                f"to {len(selected)} layers: {selected}"
+            )
+        configs.append((label.strip(), dict(zip(selected, vals))))
+
+    if not configs:
+        raise ValueError("Nothing to measure: pass --margins and/or --schedules")
+    return configs
+
+
+def measure(model, layers, selected, probes, margin_map, beta, inputs, max_new_tokens, clean_norms):
     store = {}
     handles = [
         layers[l].register_forward_hook(
-            recording_projection_hook(probes[l]["w"], probes[l]["b"], beta, margin, l, store)
+            recording_projection_hook(probes[l]["w"], probes[l]["b"], beta, margin_map[l], l, store)
         )
         for l in selected
     ]
@@ -128,7 +170,8 @@ def measure(model, layers, selected, probes, margin, beta, inputs, max_new_token
         pre = [c for c in calls if c["is_prefill"]]
         dec = [c for c in calls if not c["is_prefill"]]
         clean = max(clean_norms[l], 1e-9)
-        row = {"layer": l, "n_decode_steps": len(dec), "clean_h_norm": clean_norms[l]}
+        row = {"layer": l, "n_decode_steps": len(dec), "clean_h_norm": clean_norms[l],
+               "margin": margin_map[l]}
         if pre:
             p = pre[0]
             row.update(
@@ -151,13 +194,13 @@ def measure(model, layers, selected, probes, margin, beta, inputs, max_new_token
         "steered_norms": steered_norms,
         "inflation": {l: steered_norms[l] / max(clean_norms[l], 1e-9) for l in range(len(layers))},
     }
-def plot(results, selected, clean_norms, n_layers, out_path, model_name, layers_arg):
+def plot(results, configs, selected, clean_norms, n_layers, out_path, model_name, layers_arg):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    margins = sorted(results)
-    fig, axes = plt.subplots(1, 3, figsize=(16.5, 4.8), facecolor=SURFACE)
+    labels = [label for label, _ in configs]
+    fig, axes = plt.subplots(1, 4, figsize=(21.5, 4.8), facecolor=SURFACE)
     for ax in axes:
         ax.set_facecolor(SURFACE)
         ax.grid(True, color="#e6e5e1", linewidth=0.8, zorder=0)
@@ -171,38 +214,41 @@ def plot(results, selected, clean_norms, n_layers, out_path, model_name, layers_
 
     all_layers = list(range(n_layers))
 
-    # Panel 1 reference: the unsteered norm profile, so the natural depth trend is
+    # Panel 2 reference: the unsteered norm profile, so the natural depth trend is
     # visible in the same units as the steering magnitude plotted beside it.
-    axes[0].plot(selected, [clean_norms[l] for l in selected],
+    axes[1].plot(selected, [clean_norms[l] for l in selected],
                  color="#8a8981", linewidth=1.8, linestyle=":", marker=None,
                  label="‖h‖ clean (no steering)", zorder=2)
 
-    for i, m in enumerate(margins):
+    for i, (label, margin_map) in enumerate(configs):
         c = RAMP[i % len(RAMP)]
-        rows = results[m]["layers"]
+        rows = results[label]["layers"]
         xs = [l for l in selected if "prefill_delta_norm" in rows[l]]
-        axes[0].plot(xs, [rows[l]["prefill_delta_norm"] for l in xs],
-                     color=c, linewidth=2, marker="o", markersize=5, label=f"m={m}", zorder=3)
-        axes[1].plot(xs, [100 * rows[l]["prefill_rel"] for l in xs],
-                     color=c, linewidth=2, marker="o", markersize=5, label=f"m={m}", zorder=3)
-        infl = results[m]["inflation"]
-        axes[2].plot(all_layers, [infl[l] for l in all_layers],
-                     color=c, linewidth=2, zorder=3, label=f"m={m}")
+        axes[0].plot(selected, [margin_map[l] for l in selected],
+                     color=c, linewidth=2, marker="o", markersize=5, label=label, zorder=3)
+        axes[1].plot(xs, [rows[l]["prefill_delta_norm"] for l in xs],
+                     color=c, linewidth=2, marker="o", markersize=5, label=label, zorder=3)
+        axes[2].plot(xs, [100 * rows[l]["prefill_rel"] for l in xs],
+                     color=c, linewidth=2, marker="o", markersize=5, label=label, zorder=3)
+        infl = results[label]["inflation"]
+        axes[3].plot(all_layers, [infl[l] for l in all_layers],
+                     color=c, linewidth=2, zorder=3, label=label)
 
-    axes[2].axhline(1.0, color="#8a8981", linewidth=1.2, linestyle="--", zorder=2)
-    axes[2].axvspan(min(selected), max(selected), color="#2a78d6", alpha=0.07, zorder=1)
-    axes[2].annotate("intervened window", xy=(max(selected) + 0.6, axes[2].get_ylim()[1]),
+    axes[3].axhline(1.0, color="#8a8981", linewidth=1.2, linestyle="--", zorder=2)
+    axes[3].axvspan(min(selected), max(selected), color="#2a78d6", alpha=0.07, zorder=1)
+    axes[3].annotate("intervened window", xy=(max(selected) + 0.6, axes[3].get_ylim()[1]),
                      color=INK_MUTED, fontsize=8, va="top")
 
-    axes[0].set_title("Steering magnitude  ‖Δh‖", color=INK, fontsize=11, loc="left", pad=10)
-    axes[1].set_title("Relative to CLEAN norm at that layer  ‖Δh‖ / ‖h_clean‖",
+    axes[0].set_title("Margin schedule  m_l", color=INK, fontsize=11, loc="left", pad=10)
+    axes[1].set_title("Steering magnitude  ‖Δh‖", color=INK, fontsize=11, loc="left", pad=10)
+    axes[2].set_title("Relative to CLEAN norm at that layer  ‖Δh‖ / ‖h_clean‖",
                       color=INK, fontsize=11, loc="left", pad=10)
-    axes[2].set_title("Norm inflation  ‖h_steered‖ / ‖h_clean‖  (all layers)",
+    axes[3].set_title("Norm inflation  ‖h_steered‖ / ‖h_clean‖  (all layers)",
                       color=INK, fontsize=11, loc="left", pad=10)
-    axes[1].set_ylabel("%", color=INK_MUTED, fontsize=10)
-    axes[2].set_ylabel("×", color=INK_MUTED, fontsize=10)
+    axes[2].set_ylabel("%", color=INK_MUTED, fontsize=10)
+    axes[3].set_ylabel("×", color=INK_MUTED, fontsize=10)
     axes[0].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
-    axes[2].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
+    axes[1].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
 
     fig.suptitle(
         f"{model_name}  ·  intervened layers {layers_arg}  ·  last prompt token (prefill)  ·  "
@@ -221,7 +267,12 @@ def main():
     ap.add_argument("--probe_type", default="svm", choices=["svm", "single_direction"])
     ap.add_argument("--probe_reps_dir", default=None)
     ap.add_argument("--layers", default="11-18")
-    ap.add_argument("--margins", default="0,0.5,1.0,1.5,2.0,2.5")
+    ap.add_argument("--margins", default=None,
+                    help="Comma-separated shared margins, each applied to every selected layer.")
+    ap.add_argument("--schedules", nargs="+", default=None,
+                    help="Named per-layer margin vectors, e.g. paper=1.2,2.0,1.8,1.8,2.0,0.9,1.2")
+    ap.add_argument("--out_tag", default=None,
+                    help="Suffix for output filenames, to avoid clobbering earlier runs.")
     ap.add_argument("--beta", type=float, default=1.0)
     ap.add_argument("--dataset", default="harmbench_test")
     ap.add_argument("--limit", type=int, default=1)
@@ -232,7 +283,8 @@ def main():
     args = ap.parse_args()
 
     set_seed(args.seed)
-    margins = [float(x) for x in args.margins.replace(" ", "").split(",") if x]
+    if args.margins is None and not args.schedules:
+        args.margins = "0,0.5,1.0,1.5,2.0,2.5"
 
     model = load_model(args)
     layers = get_transformer_layers(model)
@@ -258,43 +310,58 @@ def main():
     print("Clean ||h|| by layer (unsteered; grows with depth by itself): "
           + "  ".join(f"L{l}={clean_norms[l]:.2f}" for l in selected))
 
-    results = {}
-    for m in margins:
-        results[m] = measure(model, layers, selected, probes, m, args.beta, inputs,
-                             args.max_new_tokens, clean_norms)
+    configs = build_configs(args.margins, args.schedules, selected)
 
-    for m in margins:
-        print(f"\n=== margin {m} ===")
-        hdr = (f"{'layer':>6}{'||w||':>8}{'clean|h|':>10}{'steer|h|':>10}{'infl':>7}"
-               f"{'w.h+b':>9}{'post':>8}{'||dh||':>9}{'rel%':>8}")
+    results = {}
+    for label, margin_map in configs:
+        results[label] = measure(model, layers, selected, probes, margin_map, args.beta,
+                                 inputs, args.max_new_tokens, clean_norms)
+
+    for label, margin_map in configs:
+        vec = " ".join(f"{margin_map[l]:g}" for l in selected)
+        mean_m = sum(margin_map.values()) / len(margin_map)
+        print(f"\n=== {label}   m_l = [{vec}]   mean {mean_m:.3f} ===")
+        hdr = (f"{'layer':>6}{'||w||':>8}{'m':>7}{'dm':>7}{'clean|h|':>10}{'steer|h|':>10}{'infl':>7}"
+               f"{'w.h+b':>9}{'score':>8}{'post':>8}{'||dh||':>9}{'rel%':>8}")
         if args.max_new_tokens > 0:
             hdr += f"{'dec||dh||':>11}{'dec rel%':>10}"
         print(hdr)
         print("-" * len(hdr))
+        prev_m = None
         for l in selected:
-            r = results[m]["layers"][l]
+            r = results[label]["layers"][l]
             wn = probes[l]["w"].float().norm().item()
-            line = (f"{l:>6}{wn:>8.3f}{clean_norms[l]:>10.2f}"
-                    f"{results[m]['steered_norms'][l]:>10.2f}{results[m]['inflation'][l]:>7.2f}"
-                    f"{r['prefill_raw_score']:>9.3f}{r['prefill_post_score']:>8.3f}"
+            # dm = the increment over the upstream margin. This, not m itself, is what
+            # the layer actually has left to do once upstream steering has landed the
+            # activation at score = -m_{l-1}.
+            dm = margin_map[l] if prev_m is None else margin_map[l] - prev_m
+            prev_m = margin_map[l]
+            line = (f"{l:>6}{wn:>8.3f}{margin_map[l]:>7.2f}{dm:>+7.2f}{clean_norms[l]:>10.2f}"
+                    f"{results[label]['steered_norms'][l]:>10.2f}{results[label]['inflation'][l]:>7.2f}"
+                    f"{r['prefill_raw_score']:>9.3f}{r['prefill_score']:>8.3f}{r['prefill_post_score']:>8.3f}"
                     f"{r['prefill_delta_norm']:>9.3f}{100*r['prefill_rel']:>7.1f}%")
             if args.max_new_tokens > 0 and "decode_delta_norm" in r:
                 line += f"{r['decode_delta_norm']:>11.3f}{100*r['decode_rel']:>9.1f}%"
             print(line)
-        print(f"  ('post' = probe score after steering; equals -m exactly by construction. "
-              f"'rel%' and 'infl' are relative to the clean norm at that same layer.)")
+        total_rel = sum(results[label]["layers"][l]["prefill_rel"] for l in selected)
+        print(f"  ('score' = w.h+b+m drives the move: ||dh|| = |score|/||w||. 'post' = score after "
+              f"steering, exactly -m. 'dm' is the margin increment over the previous layer.)")
+        print(f"  summed rel% across window: {100*total_rel:.1f}%")
 
     os.makedirs(args.out_dir, exist_ok=True)
     tag = f"{args.model_name}_layers{args.layers.replace('-', 'to')}"
+    if args.out_tag:
+        tag += f"_{args.out_tag}"
     json_path = os.path.join(args.out_dir, f"steering_magnitude_{tag}.json")
     with open(json_path, "w") as f:
         json.dump({"prompt": prompt, "layers": selected, "beta": args.beta,
                    "max_new_tokens": args.max_new_tokens,
                    "clean_h_norm_by_layer": clean_norms,
-                   "results": {str(k): v for k, v in results.items()}}, f, indent=2)
+                   "schedules": {label: margin_map for label, margin_map in configs},
+                   "results": results}, f, indent=2)
     print(f"\nSaved data to {json_path}")
 
-    plot(results, selected, clean_norms, n_layers,
+    plot(results, configs, selected, clean_norms, n_layers,
          os.path.join(args.out_dir, f"steering_magnitude_{tag}.png"),
          args.model_name, args.layers)
 
