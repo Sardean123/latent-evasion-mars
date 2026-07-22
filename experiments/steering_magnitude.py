@@ -84,6 +84,11 @@ def recording_projection_hook(w, b, beta, margin, layer_idx, store, eps=1e-12):
         raw = raw_score[:, -1, 0].float().mean().item()
         store.setdefault(layer_idx, []).append({
             "h_norm": h_last.norm(dim=-1).mean().item(),
+            # Post-steering norm, captured here rather than from hidden_states: in this
+            # transformers version hidden_states[l+1] is layer l's output BEFORE layer l's
+            # own forward hook, so reading it back understates the steered norm at exactly
+            # the layers being steered.
+            "h_mod_norm": h_mod[:, -1, :].float().norm(dim=-1).mean().item(),
             "delta_norm": d_last.norm(dim=-1).mean().item(),
             "raw_score": raw,
             "score": score[:, -1, 0].float().mean().item(),
@@ -158,6 +163,13 @@ def measure(model, layers, selected, probes, margin_map, beta, inputs, max_new_t
                 l: steered.hidden_states[l + 1][:, -1, :].float().norm(dim=-1).mean().item()
                 for l in range(len(layers))
             }
+            # hidden_states is correct for un-hooked layers but pre-hook at the steered
+            # ones, so take those from the hook's own record instead.
+            for l in selected:
+                calls = store.get(l, [])
+                pre = [c for c in calls if c["is_prefill"]]
+                if pre:
+                    steered_norms[l] = pre[0]["h_mod_norm"]
             if max_new_tokens > 0:
                 store.clear()  # keep only the generate() trace for the decode columns
                 model.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
