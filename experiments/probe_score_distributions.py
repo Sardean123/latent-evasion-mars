@@ -323,23 +323,23 @@ def plot(rows, window, all_layers, out_path, model_name, layers_arg):
     axes[0].set_title("Probe score  w.h + b   (mean +- 1 sd)", color=INK, fontsize=11, loc="left", pad=10)
     axes[0].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
 
-    # Distance panel, also across all layers. Downstream the orthogonal component keeps
-    # tracking the total (probe stays blind to the intervention it inherited).
-    total = [r["dist_steered"]["total"] for r in rows]
-    orth = [r["dist_steered"]["orthogonal"] for r in rows]
-    clean = [r["dist_clean"]["total"] for r in rows]
-    spread = [r["harmless_spread"] for r in rows]
-    axes[1].plot(xs, clean, color=HARMFUL_C, linewidth=2,
+    # Distance panel, across all layers EXCEPT the last. The final layer's saved
+    # representation is post-RMSNorm (get_representations stores hidden_states[1:]) while
+    # a layer hook sees pre-norm, so its distance is ~5x the rest and destroys the y-scale.
+    last = max(r["layer"] for r in rows)
+    rows_d = [r for r in rows if r["layer"] != last]
+    xd = [r["layer"] for r in rows_d]
+    axes[1].plot(xd, [r["dist_clean"]["total"] for r in rows_d], color=HARMFUL_C, linewidth=2,
                  label="unsteered distance to harmless centroid", zorder=3)
-    axes[1].plot(xs, total, color=STEER_C, linewidth=2.4,
+    axes[1].plot(xd, [r["dist_steered"]["total"] for r in rows_d], color=STEER_C, linewidth=2.4,
                  label="steered distance", zorder=4)
-    axes[1].plot(xs, orth, color=STEER_C, linewidth=1.6, linestyle=":",
-                 label="steered, orthogonal component only", zorder=4)
-    axes[1].plot(xs, spread, color=HARMLESS_C, linewidth=2, linestyle="--",
-                 label="harmless cloud's own spread", zorder=3)
+    axes[1].plot(xd, [r["dist_steered"]["orthogonal"] for r in rows_d], color=STEER_C,
+                 linewidth=1.6, linestyle=":", label="steered, orthogonal component only", zorder=4)
+    axes[1].plot(xd, [r["harmless_spread"] for r in rows_d], color=HARMLESS_C, linewidth=2,
+                 linestyle="--", label="harmless cloud's own spread", zorder=3)
     axes[1].plot(wx, [r["dist_steered"]["total"] for r in rows if r["in_window"]],
                  color=STEER_C, linewidth=0, marker="o", markersize=5, zorder=5)
-    axes[1].set_title("Distance to the harmless centroid (full space)",
+    axes[1].set_title("Distance to the harmless centroid (full space, last layer omitted)",
                       color=INK, fontsize=11, loc="left", pad=10)
     axes[1].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
 
