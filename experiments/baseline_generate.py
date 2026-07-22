@@ -1,8 +1,13 @@
 import argparse
 import json
 import os
+import sys
 
 from tqdm import tqdm
+
+# Running `python experiments/baseline_generate.py` puts experiments/ on sys.path, not the
+# repo root, so `utils` would not import. cle-a.py / cle-p.py live at the root and avoid this.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.runtime import chunked, load_model, load_prompts, set_seed
 
