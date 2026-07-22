@@ -125,3 +125,42 @@ Threshold sweep: scale each schedule's mean margin down (e.g. 1.5 -> 1.2 -> 0.9 
 flat `shared` has snapped back to refusing, that's the quantitative case that per-layer
 margins beat a shared scalar — and the measurement to trust before any stage-2 port.
 Reuses `--layer_margins`, no new search code, ~30 min at n=5.
+
+## 7. Where do steered activations actually land? (probe-score distributions)
+
+`experiments/probe_score_distributions.py`, llama3-8b, window 11-18, m=1.5, all 159
+harmbench_test prompts, last prompt token, same chat template as probe training.
+
+Question: do steered activations resemble the harmless activations the frozen probes were
+fit on, or do they merely satisfy the probe's decision rule? **The latter, twice over.**
+
+Along w. The steered score is a point mass at exactly -m (std <= 0.001 across 159
+prompts) — the projection identity, confirmed empirically. It sits **3.0-3.7 sd BELOW the
+harmless mean** (harmless: -1.08..-1.14, sd 0.11-0.14). Landing on the harmless mean would
+require m ~ 1.1; BO chose 1.5. So the optimal margin deliberately overshoots the harmless
+cloud — **the margin that best mimics harmless is not the margin that best evades.**
+
+Full space. ~98.5% of the displacement from the harmless centroid is **orthogonal to w**,
+untouchable by the projection. Steered activations remain farther from the harmless
+centroid (3.25 at L11) than a typical harmless prompt is (harmless spread 2.74). They are
+adversarial examples against a linear probe, not imitations of the harmless class.
+
+Downstream persistence: past the window the score does NOT revert to the unsteered ~+1.0;
+it decays slowly (-1.50 @ L18 -> -1.36 @ L24 -> -1.28 @ L30), supporting the paper's D.2
+claim that later layers inherit the effect. Variance grows (0.001 -> 0.11) so it becomes a
+real distribution again. Layers 0-10 match unsteered to 3 dp (no backwards leakage).
+
+### Bug found and fixed: hidden_states is pre-hook
+
+In this transformers version `hidden_states[l+1]` is layer l's output **before layer l's
+own forward hook** (it does reflect upstream hooks). Verified with a marker hook: a +1000
+offset at layer 11 never appears in hidden_states[12], though logits do change — steering
+reaches the computation, only the recording was stale. steering_magnitude.py's
+steer||h||/infl columns were reading pre-steering norms at exactly the steered layers,
+which is why L11 always printed infl=1.00. Now taken from the hook (L11 m=1.5: 1.00 ->
+1.04). ||dh|| and rel% were always in-hook, so all earlier conclusions stand.
+
+**Rule: never read steered activations off output_hidden_states. Record through hooks.**
+
+Caveat: the last layer is not comparable — `get_representations` saves `hidden_states[1:]`
+so its final index is post-RMSNorm, while a layer hook sees pre-norm.
