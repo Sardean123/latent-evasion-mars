@@ -1,0 +1,32 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# --- Generated experiment artifacts ---
+# The README describes these as outputs of the pipeline, not source:
+# probes/representations, completions, evaluations, plots and Optuna studies.
+dataset/representations/
+completions/
+runs/
+
+# Regenerable viewer dump (rebuild with experiments/view_completions.py).
+# Kept out of the tree because it is a plain-text export of harmful completions.
+experiments/results/sweep_*_outputs.txt
+
+# NB: experiments/results/ is otherwise TRACKED on purpose — the analysis
+# artifacts (results_full.json, *.png, plot_results.py) are committed results.
+# experiments/inspect_logs/*.eval are likewise tracked.
+
+# --- Local tooling / editor ---
+code
+vscode_cli.tar.gz
+.vscode-server/
+.DS_Store
+
+# --- Secrets ---
+.env
+*.pem
