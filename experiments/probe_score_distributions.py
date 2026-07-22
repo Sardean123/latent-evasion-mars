@@ -109,7 +109,21 @@ def main():
     ap.add_argument("--out_dir", default="./experiments/results")
     ap.add_argument("--out_tag", default=None)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--replot", default=None,
+                    help="Path to a saved *_distributions_*.json; re-render the plot from it "
+                         "with no model load (no GPU). Ignores all run-time args.")
     args = ap.parse_args()
+
+    if args.replot:
+        with open(args.replot) as f:
+            data = json.load(f)
+        rows = data["rows"]
+        for r in rows:
+            r.setdefault("in_window", r["layer"] in set(data["window"]))
+        out_path = args.replot.replace(".json", ".png")
+        plot(rows, data["window"], [r["layer"] for r in rows], out_path,
+             data["model"], f"{min(data['window'])}-{max(data['window']) + 1}")
+        return
 
     set_seed(args.seed)
     device = torch.device(args.device)
@@ -295,26 +309,36 @@ def plot(rows, window, all_layers, out_path, model_name, layers_arg):
         axes[0].fill_between(xs, [m - s for m, s in zip(mu, sd)], [m + s for m, s in zip(mu, sd)],
                              color=color, alpha=0.15, zorder=2)
 
-    sx = [r["layer"] for r in rows if r["in_window"]]
-    sy = [r["steered"]["mean"] for r in rows if r["in_window"]]
-    axes[0].plot(sx, sy, color=STEER_C, linewidth=2.4, marker="o", markersize=5,
-                 label="steered (= -m_l)", zorder=4)
+    # Steered score across ALL layers: a continuous line so the downstream decay
+    # (layers past the window, never directly steered) is visible, with markers on the
+    # steered window itself.
+    win = set(r["layer"] for r in rows if r["in_window"])
+    steer_mu = [r["steered"]["mean"] for r in rows]
+    axes[0].plot(xs, steer_mu, color=STEER_C, linewidth=2.4, label="steered", zorder=4)
+    wx = [r["layer"] for r in rows if r["in_window"]]
+    wy = [r["steered"]["mean"] for r in rows if r["in_window"]]
+    axes[0].plot(wx, wy, color=STEER_C, linewidth=0, marker="o", markersize=5,
+                 label="steered, in window (= -m_l)", zorder=5)
     axes[0].axhline(0, color="#8a8981", linewidth=1.2, linestyle="--", zorder=2)
     axes[0].set_title("Probe score  w.h + b   (mean +- 1 sd)", color=INK, fontsize=11, loc="left", pad=10)
     axes[0].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
 
-    total = [r["dist_steered"]["total"] for r in rows if r["in_window"]]
-    orth = [r["dist_steered"]["orthogonal"] for r in rows if r["in_window"]]
-    clean = [r["dist_clean"]["total"] for r in rows if r["in_window"]]
-    spread = [r["harmless_spread"] for r in rows if r["in_window"]]
-    axes[1].plot(sx, clean, color=HARMFUL_C, linewidth=2, marker="o", markersize=5,
+    # Distance panel, also across all layers. Downstream the orthogonal component keeps
+    # tracking the total (probe stays blind to the intervention it inherited).
+    total = [r["dist_steered"]["total"] for r in rows]
+    orth = [r["dist_steered"]["orthogonal"] for r in rows]
+    clean = [r["dist_clean"]["total"] for r in rows]
+    spread = [r["harmless_spread"] for r in rows]
+    axes[1].plot(xs, clean, color=HARMFUL_C, linewidth=2,
                  label="unsteered distance to harmless centroid", zorder=3)
-    axes[1].plot(sx, total, color=STEER_C, linewidth=2.4, marker="o", markersize=5,
+    axes[1].plot(xs, total, color=STEER_C, linewidth=2.4,
                  label="steered distance", zorder=4)
-    axes[1].plot(sx, orth, color=STEER_C, linewidth=1.6, linestyle=":", marker=None,
+    axes[1].plot(xs, orth, color=STEER_C, linewidth=1.6, linestyle=":",
                  label="steered, orthogonal component only", zorder=4)
-    axes[1].plot(sx, spread, color=HARMLESS_C, linewidth=2, linestyle="--",
+    axes[1].plot(xs, spread, color=HARMLESS_C, linewidth=2, linestyle="--",
                  label="harmless cloud's own spread", zorder=3)
+    axes[1].plot(wx, [r["dist_steered"]["total"] for r in rows if r["in_window"]],
+                 color=STEER_C, linewidth=0, marker="o", markersize=5, zorder=5)
     axes[1].set_title("Distance to the harmless centroid (full space)",
                       color=INK, fontsize=11, loc="left", pad=10)
     axes[1].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
