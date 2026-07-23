@@ -150,6 +150,9 @@ def main():
     ap.add_argument("--layers", default="11-18", help="Steered window (end-exclusive).")
     ap.add_argument("--margin", type=float, default=1.5)
     ap.add_argument("--schedule", default=None, help="Per-layer margins aligned with --layers.")
+    ap.add_argument("--margin_offset", type=float, default=0.0,
+                    help="Add this to every window margin, e.g. to push past the tuned regime "
+                         "and probe where the model breaks. Recorded in the output tag as _off<x>.")
     ap.add_argument("--beta", type=float, default=1.0)
     ap.add_argument("--dataset", default="harmbench_test")
     ap.add_argument("--limit", type=int, default=200)
@@ -183,6 +186,8 @@ def main():
         margin_map = dict(zip(window, vals))
     else:
         margin_map = {l: args.margin for l in window}
+    if args.margin_offset:
+        margin_map = {l: m + args.margin_offset for l, m in margin_map.items()}
 
     all_layers = discover_available_layers(args.svm_dir, args.probe_type)
     probes = load_probes(probe_type=args.probe_type, svm_dir=args.svm_dir,
@@ -251,6 +256,8 @@ def main():
     tag = f"{args.model_name}_layers{args.layers.replace('-', 'to')}"
     if args.out_tag:
         tag += f"_{args.out_tag}"
+    if args.margin_offset:
+        tag += f"_off{args.margin_offset:g}"
     path = os.path.join(args.out_dir, f"probe_score_over_generation_{tag}.json")
     with open(path, "w") as f:
         json.dump(data, f, indent=2)

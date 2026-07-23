@@ -17,6 +17,10 @@ runs/
 # Kept out of the tree because it is a plain-text export of harmful completions.
 experiments/results/sweep_*_outputs.txt
 
+# Plain-text model completions (harmful), readable in-editor but kept out of git
+# for the same reason as the sweep outputs above.
+experiments/results/model_outputs/
+
 # NB: experiments/results/ is otherwise TRACKED on purpose — the analysis
 # artifacts (results_full.json, *.png, plot_results.py) are committed results.
 # experiments/inspect_logs/*.eval are likewise tracked.
