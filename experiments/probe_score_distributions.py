@@ -183,9 +183,21 @@ def main():
         ]
         try:
             with torch.no_grad():
-                model.model(input_ids=inputs.input_ids)
+                steer_out = model.model(input_ids=inputs.input_ids, output_hidden_states=True)
         finally:
             remove_hooks(handles)
+        # Basis fix for the final layer only. Its probe was trained on POST-final-norm
+        # activations (get_representations saves hidden_states[1:], whose last entry has the
+        # model's final RMSNorm applied), but the forward hook sees the layer's PRE-norm
+        # output. Scoring the pre-norm hook value with the post-norm probe is a basis
+        # mismatch that makes the last-layer steered score meaningless. Read that one layer's
+        # post-norm activation from the steered pass instead -- it reflects the upstream
+        # window steering (only the STEERED layer's own hidden_states is stale; downstream
+        # layers are fine), so it matches the probe. Every other layer is pre-norm on both
+        # sides, so the hook value already agrees with hidden_states.
+        last_layer = n_layers - 1
+        if last_layer in store:
+            store[last_layer] = steer_out.hidden_states[last_layer + 1][:, -1, :].detach().float().cpu()
         for l in all_layers:
             steer_acts[l].append(store[l])
 
@@ -323,23 +335,24 @@ def plot(rows, window, all_layers, out_path, model_name, layers_arg):
     axes[0].set_title("Probe score  w.h + b   (mean +- 1 sd)", color=INK, fontsize=11, loc="left", pad=10)
     axes[0].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
 
-    # Distance panel, across all layers EXCEPT the last. The final layer's saved
-    # representation is post-RMSNorm (get_representations stores hidden_states[1:]) while
-    # a layer hook sees pre-norm, so its distance is ~5x the rest and destroys the y-scale.
-    last = max(r["layer"] for r in rows)
-    rows_d = [r for r in rows if r["layer"] != last]
-    xd = [r["layer"] for r in rows_d]
-    axes[1].plot(xd, [r["dist_clean"]["total"] for r in rows_d], color=HARMFUL_C, linewidth=2,
+    # Distance panel, all layers including the last. The final layer sits ~5x above the
+    # residual-stream scale of the rest because both curves there are post-final-RMSNorm
+    # (clean always was; steered is now read post-norm too, see the run loop). A log y-axis
+    # keeps every layer legible despite that jump and the ~350x depth-driven growth below it.
+    # Flip to linear (drop set_yscale) + --replot if the last-layer scale is acceptable.
+    xd = [r["layer"] for r in rows]
+    axes[1].set_yscale("log")
+    axes[1].plot(xd, [r["dist_clean"]["total"] for r in rows], color=HARMFUL_C, linewidth=2,
                  label="unsteered distance to harmless centroid", zorder=3)
-    axes[1].plot(xd, [r["dist_steered"]["total"] for r in rows_d], color=STEER_C, linewidth=2.4,
+    axes[1].plot(xd, [r["dist_steered"]["total"] for r in rows], color=STEER_C, linewidth=2.4,
                  label="steered distance", zorder=4)
-    axes[1].plot(xd, [r["dist_steered"]["orthogonal"] for r in rows_d], color=STEER_C,
+    axes[1].plot(xd, [r["dist_steered"]["orthogonal"] for r in rows], color=STEER_C,
                  linewidth=1.6, linestyle=":", label="steered, orthogonal component only", zorder=4)
-    axes[1].plot(xd, [r["harmless_spread"] for r in rows_d], color=HARMLESS_C, linewidth=2,
+    axes[1].plot(xd, [r["harmless_spread"] for r in rows], color=HARMLESS_C, linewidth=2,
                  linestyle="--", label="harmless cloud's own spread", zorder=3)
     axes[1].plot(wx, [r["dist_steered"]["total"] for r in rows if r["in_window"]],
                  color=STEER_C, linewidth=0, marker="o", markersize=5, zorder=5)
-    axes[1].set_title("Distance to the harmless centroid (full space, last layer omitted)",
+    axes[1].set_title("Distance to the harmless centroid (full space, log scale)",
                       color=INK, fontsize=11, loc="left", pad=10)
     axes[1].legend(frameon=False, fontsize=8, labelcolor=INK_MUTED)
 
