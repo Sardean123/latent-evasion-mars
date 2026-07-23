@@ -290,7 +290,7 @@ def main():
     ap.add_argument("--limit", type=int, default=1)
     ap.add_argument("--max_new_tokens", type=int, default=0,
                     help="0 = prefill only. >0 also traces decoding (CLE-P compounding).")
-    ap.add_argument("--out_dir", default="./experiments/results")
+    ap.add_argument("--out_dir", default="./experiments/results/steering_magnitude")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 

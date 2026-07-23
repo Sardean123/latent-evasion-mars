@@ -106,7 +106,7 @@ def main():
     ap.add_argument("--beta", type=float, default=1.0)
     ap.add_argument("--dataset", default="harmbench_test")
     ap.add_argument("--limit", type=int, default=40)
-    ap.add_argument("--out_dir", default="./experiments/results")
+    ap.add_argument("--out_dir", default="./experiments/results/probe_score_distributions")
     ap.add_argument("--out_tag", default=None)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--replot", default=None,

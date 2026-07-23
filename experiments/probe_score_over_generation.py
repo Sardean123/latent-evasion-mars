@@ -158,7 +158,7 @@ def main():
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument("--max_new_tokens", type=int, default=8, help="Generated tokens to capture (positions 0..N-1).")
     ap.add_argument("--plot_positions", default="0-5", help="Inclusive generated-position range to draw.")
-    ap.add_argument("--out_dir", default="./experiments/results")
+    ap.add_argument("--out_dir", default="./experiments/results/probe_score_over_generation")
     ap.add_argument("--out_tag", default=None)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--replot", default=None, help="Render from a saved *_over_generation_*.json; no model load.")

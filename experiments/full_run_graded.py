@@ -168,6 +168,9 @@ if __name__ == "__main__":
         print(f"  {c:<18} {len(sub):>3}   {rate(sub['ref']):.2f}   {rate(sub['harm']):.2f}  {rate(sub['fire'] >= 0.5):.2f}")
 
     import json
+    _results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "m3_overview")
+    os.makedirs(_results_dir, exist_ok=True)
+    _results_full_path = os.path.join(_results_dir, "results_full.json")
     json.dump({
         "n_rows": n_rows, "n_behaviors": n_beh, "bootstrap": "behavior-clustered", "B": B,
         "records": [{"io": str(r["io"]), "fire": float(r["fire"]), "l18": float(r["l18"]),
@@ -175,5 +178,5 @@ if __name__ == "__main__":
         "stats": stat_out, "contingency": M, "by_category": cat_out,
         "means": {"good_fire_refused": rate(R["fire"][~notref]), "good_fire_notref": rate(R["fire"][notref]),
                   "l18_refused": rate(R["l18"][~notref]), "l18_notref": rate(R["l18"][notref])},
-    }, open("results_full.json", "w"), indent=2)
-    print("\nsaved results_full.json")
+    }, open(_results_full_path, "w"), indent=2)
+    print(f"\nsaved {_results_full_path}")

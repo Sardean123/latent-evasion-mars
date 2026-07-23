@@ -12,7 +12,7 @@ harmful completions are kept out of git, matching .gitignore's sweep_*_outputs.t
 Usage:
     python experiments/dump_completions.py --layers 11-18 \
         --schedule 1.2,2.0,1.8,1.8,2.0,0.9,1.2 --n_prompts 30 --max_new_tokens 64 \
-        --out ./experiments/results/model_outputs/steered_completions_paper.txt
+        --out_tag paper [--margin_offset 1.5]
 """
 import argparse
 import os
