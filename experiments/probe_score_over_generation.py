@@ -18,14 +18,21 @@ Two conditions, greedy-decoded on the same harmful prompts:
   * UNSTEERED -- the model generates freely (on a harmful prompt it typically refuses).
                  Read straight from hidden_states.
 
+STEERING vs SCORING probes are separate. --svm_dir is the STEERING probe set (it defines
+the CLE intervention -- keep it on the original probes). --score_svm_dir picks the probe the
+steered/unsteered activations are SCORED against, and can be a generated-token family
+(train_svm_gentok / train_svm_alltok, per-layer) or, with --score_probe_set genpos, the
+per-(layer, position) probes in train_svm_genpos (scored position-matched). This asks whether
+steering that nulls the ORIGINAL probe also evades a probe trained on the generation
+distribution. When the score probes differ from the steering probes, the window layers are no
+longer -m by construction -- their score under the new probe is a real measurement.
+
 Three caveats baked into how this is read:
 
-1. OFF-DISTRIBUTION PROBE. The probes were fit on last-prompt-token activations. The
-   harmless/harmful reference bands drawn here are that same prompt-token reference, so
-   generated-token scores mean "which side of the decision boundary", not "calibrated to a
-   generated-token harmless distribution". Building the latter would mean generating on
-   harmless prompts too -- left for later.
-2. WINDOW LAYERS ARE -m BY CONSTRUCTION at every position; don't read signal into them.
+1. OFF-DISTRIBUTION PROBE (default only). With the original probes the reference bands are a
+   last-prompt-token reference, so generated-token scores mean "which side of the boundary".
+   Scoring with a gentok/alltok/genpos probe removes this -- those are fit on generated tokens.
+2. WINDOW LAYERS ARE -m BY CONSTRUCTION only when scoring with the SAME probe used to steer.
 3. Position p is a DIFFERENT token across conditions (steered emits different text), so the
    x-within-a-line is "generation step", not "the same token".
 
@@ -100,12 +107,35 @@ def eos_ids(model):
     return ids
 
 
+def load_genpos_probes(score_dir):
+    """Load per-(layer, generated-position) probes svm_layerLL_posPP.pt into
+    {layer: {pos: {"w", "b"}}}. Returns (probes, n_positions, sorted_layers)."""
+    import re
+    pat = re.compile(r"svm_layer(\d+)_pos(\d+)\.pt$")
+    probes, max_pos = {}, -1
+    for name in os.listdir(score_dir):
+        m = pat.match(name)
+        if not m:
+            continue
+        l, p = int(m.group(1)), int(m.group(2))
+        obj = torch.load(os.path.join(score_dir, name), map_location="cpu")
+        probes.setdefault(l, {})[p] = {"w": obj["w"].float().view(-1),
+                                       "b": torch.as_tensor(obj["b"]).float().view(())}
+        max_pos = max(max_pos, p)
+    if not probes:
+        raise ValueError(f"No svm_layerLL_posPP.pt files found in {score_dir}")
+    return probes, max_pos + 1, sorted(probes.keys())
+
+
 def generate_and_score(model, layers, all_layers, input_ids, n_new, *, steer, window,
-                       probes, beta, margin_map, eos, per_pos):
+                       steer_probes, score_probes, score_mode, n_trained_pos, beta, margin_map, eos, per_pos):
     """Greedy-decode n_new tokens (no KV cache) and record probe scores at each captured
-    position. per_pos[pos][layer] gets one score appended per prompt. Positions: -1 = last
-    prompt token; 0.. = generated tokens. Stops at the first EOS so no post-EOS junk is
-    aggregated."""
+    position. Steering (window projection) always uses steer_probes; scoring uses
+    score_probes, which may be a different probe set entirely. score_mode 'layer' scores
+    every layer with score_probes[l]; 'genpos' scores generated position p with the
+    position-matched probe score_probes[l][p] (prompt token and untrained positions skipped).
+    per_pos[pos][layer] gets one score appended per prompt; positions: -1 = last prompt
+    token, 0.. = generated. Stops at the first EOS so no post-EOS junk is aggregated."""
     n_layers = len(layers)
     last_layer = n_layers - 1
 
@@ -114,7 +144,7 @@ def generate_and_score(model, layers, all_layers, input_ids, n_new, *, steer, wi
     if steer:
         handles = [
             layers[l].register_forward_hook(
-                steer_record_hook(l, store, probes[l]["w"], probes[l]["b"], beta, margin_map.get(l, 0.0))
+                steer_record_hook(l, store, steer_probes[l]["w"], steer_probes[l]["b"], beta, margin_map.get(l, 0.0))
             )
             for l in window
         ]
@@ -131,7 +161,16 @@ def generate_and_score(model, layers, all_layers, input_ids, n_new, *, steer, wi
                     # hidden_states reflects upstream steering for non-window/downstream
                     # layers; its last entry is post-final-norm, matching the last probe.
                     act = out.hidden_states[l + 1][:, -1, :].detach().float().cpu()
-                per_pos[pos][l].append(score_of(act, probes[l]["w"], probes[l]["b"]).item())
+                if score_mode == "genpos":
+                    if pos < 0 or pos >= n_trained_pos:
+                        continue  # per-position probes only exist for generated positions
+                    lp = score_probes.get(l, {}).get(pos)
+                    if lp is None:
+                        continue
+                    w, b = lp["w"], lp["b"]
+                else:
+                    w, b = score_probes[l]["w"], score_probes[l]["b"]
+                per_pos[pos][l].append(score_of(act, w, b).item())
             next_id = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
             seq = torch.cat([seq, next_id], dim=1)
             if next_id.item() in eos:
@@ -144,7 +183,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model_name", default="llama3-8b")
     ap.add_argument("--device", default="cuda:0")
-    ap.add_argument("--svm_dir", default=None)
+    ap.add_argument("--svm_dir", default=None, help="STEERING probes (the projection direction). "
+                    "Keep this on the original CLE probes -- it defines the intervention.")
+    ap.add_argument("--score_svm_dir", default=None,
+                    help="SCORING probes, if different from the steering probes. Point at "
+                         "train_svm_gentok / train_svm_alltok / train_svm_genpos to evaluate the "
+                         "steered activations under a generated-token probe. Default: same as --svm_dir.")
+    ap.add_argument("--score_probe_set", default="layer", choices=["layer", "genpos"],
+                    help="'layer': one probe per layer (gentok/alltok/original). 'genpos': "
+                         "per-(layer, generated position) probes, scored position-matched.")
     ap.add_argument("--probe_type", default="svm", choices=["svm", "single_direction"])
     ap.add_argument("--probe_reps_dir", default=None)
     ap.add_argument("--layers", default="11-18", help="Steered window (end-exclusive).")
@@ -189,29 +236,50 @@ def main():
     if args.margin_offset:
         margin_map = {l: m + args.margin_offset for l, m in margin_map.items()}
 
-    all_layers = discover_available_layers(args.svm_dir, args.probe_type)
-    probes = load_probes(probe_type=args.probe_type, svm_dir=args.svm_dir,
-                         layer_indices=all_layers, device=torch.device("cpu"),
-                         explicit_reps_dir=args.probe_reps_dir)
-    X_harm, X_harmless = load_class_representations(args.probe_reps_dir or args.svm_dir)
+    # STEERING probes (define the intervention) -- always the dir given by --svm_dir.
+    steer_layers = discover_available_layers(args.svm_dir, args.probe_type)
+    steer_probes = load_probes(probe_type=args.probe_type, svm_dir=args.svm_dir,
+                               layer_indices=steer_layers, device=torch.device("cpu"),
+                               explicit_reps_dir=args.probe_reps_dir)
+
+    # SCORING probes -- may be a different family. reference = per-layer class bands (layer
+    # mode only; genpos has no single class-rep set).
+    score_dir = args.score_svm_dir or args.svm_dir
+    reference = {"harmless": {}, "harmful": {}}
+    if args.score_probe_set == "genpos":
+        score_probes, n_trained_pos, all_layers = load_genpos_probes(score_dir)
+    else:
+        n_trained_pos = 0
+        all_layers = discover_available_layers(score_dir, args.probe_type)
+        score_probes = load_probes(probe_type=args.probe_type, svm_dir=score_dir,
+                                   layer_indices=all_layers, device=torch.device("cpu"),
+                                   explicit_reps_dir=args.probe_reps_dir)
+        X_harm, X_harmless = load_class_representations(args.probe_reps_dir or score_dir)
+        for l in all_layers:
+            w, b = score_probes[l]["w"].cpu(), score_probes[l]["b"].cpu()
+            reference["harmless"][str(l)] = summarize(score_of(X_harmless[:, l, :], w, b))
+            reference["harmful"][str(l)] = summarize(score_of(X_harm[:, l, :], w, b))
 
     prompts, _ = load_prompts(args)
     eos = eos_ids(model)
+    score_desc = f"{args.score_probe_set}:{os.path.basename(os.path.normpath(score_dir))}"
     print(f"Model: {args.model_name} | window {args.layers} -> {window} | margins {margin_map}")
+    print(f"Steer probes: {os.path.basename(os.path.normpath(args.svm_dir))} | Score probes: {score_desc}")
     print(f"Eval prompts: {len(prompts)} from {args.dataset} | max_new_tokens {args.max_new_tokens} | eos {sorted(eos)}\n")
 
     positions = list(range(-1, args.max_new_tokens))
     # cond -> pos -> layer -> [score per prompt]
     acc = {c: {p: {l: [] for l in all_layers} for p in positions} for c in ("steered", "unsteered")}
 
+    score_kw = dict(window=window, steer_probes=steer_probes, score_probes=score_probes,
+                    score_mode=args.score_probe_set, n_trained_pos=n_trained_pos,
+                    beta=args.beta, margin_map=margin_map, eos=eos)
     for prompt in tqdm(prompts, desc="Generating"):
         inputs = model.prepare_inputs(prompt)
         generate_and_score(model, layers, all_layers, inputs.input_ids, args.max_new_tokens,
-                           steer=False, window=window, probes=probes, beta=args.beta,
-                           margin_map=margin_map, eos=eos, per_pos=acc["unsteered"])
+                           steer=False, per_pos=acc["unsteered"], **score_kw)
         generate_and_score(model, layers, all_layers, inputs.input_ids, args.max_new_tokens,
-                           steer=True, window=window, probes=probes, beta=args.beta,
-                           margin_map=margin_map, eos=eos, per_pos=acc["steered"])
+                           steer=True, per_pos=acc["steered"], **score_kw)
 
     # --- aggregate: cond -> pos -> layer -> {mean,std,n} ---
     conditions = {}
@@ -223,16 +291,12 @@ def main():
                 vals = acc[c][p][l]
                 if vals:
                     conditions[c][str(p)][str(l)] = summarize(torch.tensor(vals))
-    # Prompt-token reference bands (last prompt token = the probes' training position).
-    reference = {"harmless": {}, "harmful": {}}
-    for l in all_layers:
-        w, b = probes[l]["w"].cpu(), probes[l]["b"].cpu()
-        reference["harmless"][str(l)] = summarize(score_of(X_harmless[:, l, :], w, b))
-        reference["harmful"][str(l)] = summarize(score_of(X_harm[:, l, :], w, b))
+    # reference bands were computed above from the SCORE probes (empty in genpos mode).
 
     data = {"model": args.model_name, "window": window, "margins": margin_map,
             "dataset": args.dataset, "n_eval": len(prompts), "max_new_tokens": args.max_new_tokens,
-            "layers": all_layers, "conditions": conditions, "reference": reference}
+            "layers": all_layers, "conditions": conditions, "reference": reference,
+            "steer_probes": os.path.basename(os.path.normpath(args.svm_dir)), "score_probes": score_desc}
 
     # --- console: per-position mean score at a few representative layers ---
     win_end = max(window)
@@ -258,6 +322,11 @@ def main():
         tag += f"_{args.out_tag}"
     if args.margin_offset:
         tag += f"_off{args.margin_offset:g}"
+    if args.score_probe_set == "genpos":
+        tag += "_scoregenpos"
+    elif args.score_svm_dir:
+        score_name = os.path.basename(os.path.normpath(score_dir)).replace("train_svm_", "").replace("train_svm", "orig")
+        tag += f"_score{score_name}"
     path = os.path.join(args.out_dir, f"probe_score_over_generation_{tag}.json")
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
@@ -324,8 +393,10 @@ def plot(data, out_path, plot_positions):
     axes[1].legend(frameon=False, fontsize=7.5, labelcolor=INK_MUTED, ncol=2)
 
     m = data["model"]
+    score_probes = data.get("score_probes", "orig")
     fig.suptitle(f"{m}  ·  probe score across generated tokens  ·  window "
-                 f"{min(window)}-{max(window) + 1}  ·  {data['n_eval']} harmful prompts",
+                 f"{min(window)}-{max(window) + 1}  ·  score probe: {score_probes}  ·  "
+                 f"{data['n_eval']} harmful prompts",
                  color=INK, fontsize=12, x=0.006, ha="left")
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.savefig(out_path, dpi=160, facecolor=SURFACE)
