@@ -74,6 +74,21 @@ steer probes: `train_svm` · score probes: `layer:train_svm` · window 11-18 · 
 | 6 | -1.14 / 0.04 | -0.88 / -0.18 | -0.15 / 0.25 |
 | 7 | -1.14 / -0.06 | -0.84 / -0.29 | -0.14 / 0.20 |
 
+### llama3-8b_layers11to18_hlmean_clea
+steer probes: `train_svm` · score probes: `layer:train_svm` · window 11-18 · 159 prompts
+
+| pos (−1=post-instr) | L17 steer/unsteer | L24 steer/unsteer | L31 steer/unsteer |
+| --- | --- | --- | --- |
+| -1 | -0.99 / 1.04 | -0.97 / 1.10 | -0.82 / 1.00 |
+| 0 | -0.57 / 0.92 | -0.52 / 0.68 | -0.13 / 0.27 |
+| 1 | -0.62 / 0.43 | -0.66 / -0.10 | -0.07 / 0.27 |
+| 2 | -0.63 / 0.28 | -0.68 / -0.08 | -0.04 / 0.29 |
+| 3 | -0.69 / 0.12 | -0.68 / -0.21 | -0.07 / 0.26 |
+| 4 | -0.88 / 0.09 | -0.84 / -0.22 | -0.16 / 0.24 |
+| 5 | -0.76 / 0.07 | -0.72 / -0.21 | -0.06 / 0.23 |
+| 6 | -0.80 / 0.04 | -0.76 / -0.18 | -0.10 / 0.25 |
+| 7 | -0.72 / -0.06 | -0.66 / -0.29 | -0.06 / 0.20 |
+
 ### llama3-8b_layers11to18_paper
 steer probes: `train_svm` · score probes: `layer:train_svm` · window 11-18 · 159 prompts
 
@@ -155,6 +170,7 @@ steer probes: `train_svm` · score probes: `layer:train_svm_gentok` · window 11
 - `probe_score_distributions/probe_score_distributions_llama3-8b_layers11to18_paper.png`
 - `probe_score_distributions/probe_score_distributions_llama3-8b_layers11to18_shared.png`
 - `probe_score_over_generation/probe_score_over_generation_llama3-8b_layers11to18_hlmean.png`
+- `probe_score_over_generation/probe_score_over_generation_llama3-8b_layers11to18_hlmean_clea.png`
 - `probe_score_over_generation/probe_score_over_generation_llama3-8b_layers11to18_paper.png`
 - `probe_score_over_generation/probe_score_over_generation_llama3-8b_layers11to18_paper_off1.5.png`
 - `probe_score_over_generation/probe_score_over_generation_llama3-8b_layers11to18_paper_scorealltok.png`

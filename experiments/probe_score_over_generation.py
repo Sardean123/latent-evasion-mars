@@ -61,7 +61,7 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.args import parse_layers_arg
-from utils.hooks import hidden_from_output, replace_hidden, remove_hooks
+from utils.hooks import hidden_from_output, replace_hidden, remove_hooks, pipeline_delta_hook
 from utils.models_utils import get_transformer_layers
 from utils.probes import discover_available_layers, load_class_representations, load_probes
 from utils.runtime import load_model, load_prompts, set_seed
@@ -69,6 +69,18 @@ from utils.runtime import load_model, load_prompts, set_seed
 SURFACE, INK, INK_MUTED = "#fcfcfb", "#0b0b0b", "#52514e"
 HARMLESS_C, HARMFUL_C = "#2a9d5c", "#c0392b"
 PROMPT_C = "#8a8981"
+
+
+def add_record_hook(layer_idx, store, delta):
+    """CLE-A: add the fixed captured delta to every position, record the steered last token,
+    and return the modified output so downstream layers see the steering."""
+    def hook(module, inputs, output):
+        h = hidden_from_output(output)
+        v = delta.to(device=h.device, dtype=h.dtype).view(1, 1, -1)
+        h_mod = h + v
+        store[layer_idx] = h_mod[:, -1, :].detach().float().cpu()
+        return replace_hidden(output, h_mod)
+    return hook
 
 
 def steer_record_hook(layer_idx, store, w, b, beta, margin, eps=1e-12):
@@ -128,27 +140,44 @@ def load_genpos_probes(score_dir):
 
 
 def generate_and_score(model, layers, all_layers, input_ids, n_new, *, steer, window,
-                       steer_probes, score_probes, score_mode, n_trained_pos, beta, margin_map, eos, per_pos):
+                       steer_probes, score_probes, score_mode, n_trained_pos, beta, margin_map, eos, per_pos,
+                       method="cle-p"):
     """Greedy-decode n_new tokens (no KV cache) and record probe scores at each captured
-    position. Steering (window projection) always uses steer_probes. Scoring is
-    IN-DISTRIBUTION per position: the post-instruction token (pos -1) is always scored with
-    the original steer_probes (the position they were fit on), and GENERATED tokens (pos>=0)
-    with score_probes -- so a generated-only family (gentok/genpos) never scores the prompt
-    token. score_mode 'layer' uses score_probes[l]; 'genpos' uses the position-matched
-    score_probes[l][p] (untrained positions skipped). per_pos[pos][layer] gets one score
-    per prompt. Stops at the first EOS so no post-EOS junk is aggregated."""
+    position. Steering (window) uses steer_probes: method 'cle-p' re-projects every position
+    to -m at every step; 'cle-a' captures the per-layer projection delta at the last prompt
+    token (one forward), then ADDS that fixed delta to every position during generation --
+    so window scores land at -m + (current raw score - capture raw score), not exactly -m.
+    Scoring is IN-DISTRIBUTION per position: the post-instruction token (pos -1) is always
+    scored with the original steer_probes, and GENERATED tokens (pos>=0) with score_probes --
+    so a generated-only family (gentok/genpos) never scores the prompt token. score_mode
+    'layer' uses score_probes[l]; 'genpos' uses the position-matched score_probes[l][p].
+    per_pos[pos][layer] gets one score per prompt. Stops at the first EOS."""
     n_layers = len(layers)
     last_layer = n_layers - 1
 
     handles = []
     store = {}
-    if steer:
+    if steer and method == "cle-p":
         handles = [
             layers[l].register_forward_hook(
                 steer_record_hook(l, store, steer_probes[l]["w"], steer_probes[l]["b"], beta, margin_map.get(l, 0.0))
             )
             for l in window
         ]
+    elif steer and method == "cle-a":
+        # Capture pass: one forward over the prompt to get each window layer's delta at the
+        # last prompt token, then add those fixed deltas to every position during generation.
+        deltas = {}
+        cap = [
+            layers[l].register_forward_hook(
+                pipeline_delta_hook(steer_probes[l]["w"], steer_probes[l]["b"], beta, margin_map.get(l, 0.0), l, deltas)
+            )
+            for l in window
+        ]
+        with torch.no_grad():
+            model.model(input_ids=input_ids)
+        remove_hooks(cap)
+        handles = [layers[l].register_forward_hook(add_record_hook(l, store, deltas[l].view(-1))) for l in window]
     try:
         seq = input_ids
         for step in range(n_new + 1):
@@ -207,6 +236,10 @@ def main():
     ap.add_argument("--margin_offset", type=float, default=0.0,
                     help="Add this to every window margin, e.g. to push past the tuned regime "
                          "and probe where the model breaks. Recorded in the output tag as _off<x>.")
+    ap.add_argument("--method", default="cle-p", choices=["cle-p", "cle-a"],
+                    help="cle-p: re-project every position to -m each step. cle-a: capture the "
+                         "delta at the last prompt token, then add it to every position (window "
+                         "scores drift off -m).")
     ap.add_argument("--beta", type=float, default=1.0)
     ap.add_argument("--dataset", default="harmbench_test")
     ap.add_argument("--limit", type=int, default=200)
@@ -270,7 +303,7 @@ def main():
     prompts, _ = load_prompts(args)
     eos = eos_ids(model)
     score_desc = f"{args.score_probe_set}:{os.path.basename(os.path.normpath(score_dir))}"
-    print(f"Model: {args.model_name} | window {args.layers} -> {window} | margins {margin_map}")
+    print(f"Model: {args.model_name} | method {args.method} | window {args.layers} -> {window} | margins {margin_map}")
     print(f"Steer probes: {os.path.basename(os.path.normpath(args.svm_dir))} | Score probes: {score_desc}")
     print(f"Eval prompts: {len(prompts)} from {args.dataset} | max_new_tokens {args.max_new_tokens} | eos {sorted(eos)}\n")
 
@@ -280,7 +313,7 @@ def main():
 
     score_kw = dict(window=window, steer_probes=steer_probes, score_probes=score_probes,
                     score_mode=args.score_probe_set, n_trained_pos=n_trained_pos,
-                    beta=args.beta, margin_map=margin_map, eos=eos)
+                    beta=args.beta, margin_map=margin_map, eos=eos, method=args.method)
     for prompt in tqdm(prompts, desc="Generating"):
         inputs = model.prepare_inputs(prompt)
         generate_and_score(model, layers, all_layers, inputs.input_ids, args.max_new_tokens,
@@ -303,7 +336,8 @@ def main():
     data = {"model": args.model_name, "window": window, "margins": margin_map,
             "dataset": args.dataset, "n_eval": len(prompts), "max_new_tokens": args.max_new_tokens,
             "layers": all_layers, "conditions": conditions, "reference": reference,
-            "steer_probes": os.path.basename(os.path.normpath(args.svm_dir)), "score_probes": score_desc}
+            "steer_probes": os.path.basename(os.path.normpath(args.svm_dir)), "score_probes": score_desc,
+            "method": args.method}
 
     # --- console: per-position mean score at a few representative layers ---
     win_end = max(window)
@@ -327,6 +361,8 @@ def main():
     tag = f"{args.model_name}_layers{args.layers.replace('-', 'to')}"
     if args.out_tag:
         tag += f"_{args.out_tag}"
+    if args.method != "cle-p":
+        tag += f"_{args.method.replace('-', '')}"
     if args.margin_offset:
         tag += f"_off{args.margin_offset:g}"
     if args.score_probe_set == "genpos":
@@ -401,7 +437,8 @@ def plot(data, out_path, plot_positions):
 
     m = data["model"]
     score_probes = data.get("score_probes", "orig")
-    fig.suptitle(f"{m}  ·  probe score across generated tokens  ·  window "
+    method = data.get("method", "cle-p")
+    fig.suptitle(f"{m}  ·  {method}  ·  probe score across generated tokens  ·  window "
                  f"{min(window)}-{max(window) + 1}  ·  score probe: {score_probes}  ·  "
                  f"{data['n_eval']} harmful prompts",
                  color=INK, fontsize=12, x=0.006, ha="left")
