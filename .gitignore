@@ -9,7 +9,14 @@ venv/
 # --- Generated experiment artifacts ---
 # The README describes these as outputs of the pipeline, not source:
 # probes/representations, completions, evaluations, plots and Optuna studies.
-dataset/representations/
+# Representations are ignored by default -- the HFx/HLx activation tensors are ~900MB --
+# but the trained probe checkpoints (svm_*.pt / sd_*.pt, ~7.5MB) are committed so the
+# team can use them directly without regenerating.
+dataset/representations/**
+!dataset/representations/*/
+!dataset/representations/*/*/
+!dataset/representations/*/*/svm_*.pt
+!dataset/representations/*/*/sd_*.pt
 completions/
 runs/
 
