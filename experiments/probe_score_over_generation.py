@@ -99,6 +99,39 @@ def steer_record_hook(layer_idx, store, w, b, beta, margin, eps=1e-12):
     return hook
 
 
+def genpos_steer_record_hook(layer_idx, store, plen, w_post, b_post, m_post, gen_pp, beta, eps=1e-12):
+    """CLE-P with position-dependent probes: project each position along the probe that owns it.
+    Prompt positions (0..plen-1) use the post-instruction probe (w_post,b_post,m_post); generated
+    position p (absolute index plen+p) uses that position's genpos probe gen_pp[p]=(w,b,m). Every
+    position is re-projected to -m of its OWN probe at every step (closed loop), and the steered
+    last token is recorded so downstream layers see the steering. Batch size 1."""
+    def hook(module, inputs, output):
+        h = hidden_from_output(output)
+        seq, D = h.shape[1], h.shape[-1]
+        device, dtype = h.device, h.dtype
+        W = torch.empty(seq, D, device=device, dtype=dtype)
+        B = torch.empty(seq, device=device, dtype=dtype)
+        M = torch.empty(seq, device=device, dtype=dtype)
+        wp = w_post.to(device=device, dtype=dtype)
+        W[:plen] = wp
+        B[:plen] = float(b_post)
+        M[:plen] = float(m_post)
+        for i in range(plen, seq):
+            p = i - plen
+            probe = gen_pp.get(p)
+            if probe is None:  # position beyond trained genpos range -> fall back to post-instr probe
+                W[i] = wp; B[i] = float(b_post); M[i] = float(m_post)
+            else:
+                wg, bg, mg = probe
+                W[i] = wg.to(device=device, dtype=dtype); B[i] = float(bg); M[i] = float(mg)
+        w_norm_sq = (W * W).sum(dim=-1).clamp_min(eps)          # (seq,)
+        score = (h[0] * W).sum(dim=-1) + B + M                  # (seq,)
+        h_mod = (h[0] - beta * (score / w_norm_sq).unsqueeze(-1) * W).unsqueeze(0)
+        store[layer_idx] = h_mod[:, -1, :].detach().float().cpu()
+        return replace_hidden(output, h_mod)
+    return hook
+
+
 def score_of(X, w, b):
     return X.float() @ w.float() + b.float()
 
@@ -141,12 +174,15 @@ def load_genpos_probes(score_dir):
 
 def generate_and_score(model, layers, all_layers, input_ids, n_new, *, steer, window,
                        steer_probes, score_probes, score_mode, n_trained_pos, beta, margin_map, eos, per_pos,
-                       method="cle-p"):
+                       method="cle-p", genpos_margin=None):
     """Greedy-decode n_new tokens (no KV cache) and record probe scores at each captured
     position. Steering (window) uses steer_probes: method 'cle-p' re-projects every position
     to -m at every step; 'cle-a' captures the per-layer projection delta at the last prompt
     token (one forward), then ADDS that fixed delta to every position during generation --
     so window scores land at -m + (current raw score - capture raw score), not exactly -m.
+    'cle-p-genpos' is cle-p but position-dependent: prompt tokens are projected on the post-instr
+    probe (steer_probes, margin_map), and generated position p on its genpos probe (score_probes
+    [l][p], margin genpos_margin[l][p]) -- steering along each generated position's own direction.
     Scoring is IN-DISTRIBUTION per position: the post-instruction token (pos -1) is always
     scored with the original steer_probes, and GENERATED tokens (pos>=0) with score_probes --
     so a generated-only family (gentok/genpos) never scores the prompt token. score_mode
@@ -178,6 +214,19 @@ def generate_and_score(model, layers, all_layers, input_ids, n_new, *, steer, wi
             model.model(input_ids=input_ids)
         remove_hooks(cap)
         handles = [layers[l].register_forward_hook(add_record_hook(l, store, deltas[l].view(-1))) for l in window]
+    elif steer and method == "cle-p-genpos":
+        plen = input_ids.shape[1]
+        genpos_margin = genpos_margin or {}
+        handles = []
+        for l in window:
+            gen_pp = {p: (lp["w"], lp["b"], genpos_margin.get(l, {}).get(p, 0.0))
+                      for p, lp in score_probes.get(l, {}).items()}
+            handles.append(
+                layers[l].register_forward_hook(
+                    genpos_steer_record_hook(l, store, plen, steer_probes[l]["w"], steer_probes[l]["b"],
+                                             margin_map.get(l, 0.0), gen_pp, beta)
+                )
+            )
     try:
         seq = input_ids
         for step in range(n_new + 1):
@@ -236,10 +285,14 @@ def main():
     ap.add_argument("--margin_offset", type=float, default=0.0,
                     help="Add this to every window margin, e.g. to push past the tuned regime "
                          "and probe where the model breaks. Recorded in the output tag as _off<x>.")
-    ap.add_argument("--method", default="cle-p", choices=["cle-p", "cle-a"],
+    ap.add_argument("--method", default="cle-p", choices=["cle-p", "cle-a", "cle-p-genpos"],
                     help="cle-p: re-project every position to -m each step. cle-a: capture the "
                          "delta at the last prompt token, then add it to every position (window "
-                         "scores drift off -m).")
+                         "scores drift off -m). cle-p-genpos: cle-p, but generated position p is "
+                         "projected on its own genpos probe/direction (margin from --genpos_bands_json).")
+    ap.add_argument("--genpos_bands_json", default=None,
+                    help="Per-(layer,pos) training bands JSON (from genpos_bands.py). Required for "
+                         "--method cle-p-genpos: the generated-position margin is m(l,p) = -harmless_mean(l,p).")
     ap.add_argument("--beta", type=float, default=1.0)
     ap.add_argument("--dataset", default="harmbench_test")
     ap.add_argument("--limit", type=int, default=200)
@@ -288,6 +341,18 @@ def main():
     reference = {"harmless": {}, "harmful": {}}
     if args.score_probe_set == "genpos":
         score_probes, n_trained_pos, all_layers = load_genpos_probes(score_dir)
+        # Reference bands = harmless/harmful TRAINING prompt-token activations scored on the
+        # ORIGINAL prompt-token probe (steer_probes) -- the fair reference for the post-instr
+        # (pos -1) line, which is also scored on that probe. Generated-position lines are each
+        # scored on their own genpos probe and read against the shared 0 boundary.
+        X_harm, X_harmless = load_class_representations(args.probe_reps_dir or args.svm_dir)
+        for l in all_layers:
+            lp = steer_probes.get(l)
+            if lp is None:
+                continue
+            w, b = lp["w"].cpu(), lp["b"].cpu()
+            reference["harmless"][str(l)] = summarize(score_of(X_harmless[:, l, :], w, b))
+            reference["harmful"][str(l)] = summarize(score_of(X_harm[:, l, :], w, b))
     else:
         n_trained_pos = 0
         all_layers = discover_available_layers(score_dir, args.probe_type)
@@ -299,6 +364,26 @@ def main():
             w, b = score_probes[l]["w"].cpu(), score_probes[l]["b"].cpu()
             reference["harmless"][str(l)] = summarize(score_of(X_harmless[:, l, :], w, b))
             reference["harmful"][str(l)] = summarize(score_of(X_harm[:, l, :], w, b))
+
+    # cle-p-genpos: build the generated-position margins m(l,p) = -harmless_mean(l,p) from the
+    # per-(layer,pos) training bands -- "the same mean margin thing", applied to each genpos probe.
+    genpos_margin = None
+    if args.method == "cle-p-genpos":
+        if args.score_probe_set != "genpos":
+            raise ValueError("--method cle-p-genpos requires --score_probe_set genpos.")
+        if not args.genpos_bands_json:
+            raise ValueError("--method cle-p-genpos requires --genpos_bands_json (from genpos_bands.py).")
+        with open(args.genpos_bands_json) as f:
+            bands = json.load(f)["bands"]
+        genpos_margin = {}
+        for l in window:
+            for p, lp in score_probes.get(l, {}).items():
+                hb = bands.get(str(p), {}).get(str(l), {}).get("harmless")
+                if hb is None:
+                    raise ValueError(f"No harmless band for (layer {l}, pos {p}) in {args.genpos_bands_json}")
+                genpos_margin.setdefault(l, {})[p] = -float(hb["mean"])
+        sample = {p: round(genpos_margin[max(window)][p], 3) for p in sorted(genpos_margin[max(window)])}
+        print(f"genpos margins (L{max(window)}, by gen pos): {sample}")
 
     prompts, _ = load_prompts(args)
     eos = eos_ids(model)
@@ -313,7 +398,8 @@ def main():
 
     score_kw = dict(window=window, steer_probes=steer_probes, score_probes=score_probes,
                     score_mode=args.score_probe_set, n_trained_pos=n_trained_pos,
-                    beta=args.beta, margin_map=margin_map, eos=eos, method=args.method)
+                    beta=args.beta, margin_map=margin_map, eos=eos, method=args.method,
+                    genpos_margin=genpos_margin)
     for prompt in tqdm(prompts, desc="Generating"):
         inputs = model.prepare_inputs(prompt)
         generate_and_score(model, layers, all_layers, inputs.input_ids, args.max_new_tokens,
