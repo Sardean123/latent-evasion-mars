@@ -130,12 +130,13 @@ def load_genpos_probes(score_dir):
 def generate_and_score(model, layers, all_layers, input_ids, n_new, *, steer, window,
                        steer_probes, score_probes, score_mode, n_trained_pos, beta, margin_map, eos, per_pos):
     """Greedy-decode n_new tokens (no KV cache) and record probe scores at each captured
-    position. Steering (window projection) always uses steer_probes; scoring uses
-    score_probes, which may be a different probe set entirely. score_mode 'layer' scores
-    every layer with score_probes[l]; 'genpos' scores generated position p with the
-    position-matched probe score_probes[l][p] (prompt token and untrained positions skipped).
-    per_pos[pos][layer] gets one score appended per prompt; positions: -1 = last prompt
-    token, 0.. = generated. Stops at the first EOS so no post-EOS junk is aggregated."""
+    position. Steering (window projection) always uses steer_probes. Scoring is
+    IN-DISTRIBUTION per position: the post-instruction token (pos -1) is always scored with
+    the original steer_probes (the position they were fit on), and GENERATED tokens (pos>=0)
+    with score_probes -- so a generated-only family (gentok/genpos) never scores the prompt
+    token. score_mode 'layer' uses score_probes[l]; 'genpos' uses the position-matched
+    score_probes[l][p] (untrained positions skipped). per_pos[pos][layer] gets one score
+    per prompt. Stops at the first EOS so no post-EOS junk is aggregated."""
     n_layers = len(layers)
     last_layer = n_layers - 1
 
@@ -161,9 +162,15 @@ def generate_and_score(model, layers, all_layers, input_ids, n_new, *, steer, wi
                     # hidden_states reflects upstream steering for non-window/downstream
                     # layers; its last entry is post-final-norm, matching the last probe.
                     act = out.hidden_states[l + 1][:, -1, :].detach().float().cpu()
-                if score_mode == "genpos":
-                    if pos < 0 or pos >= n_trained_pos:
-                        continue  # per-position probes only exist for generated positions
+                if pos < 0:
+                    # post-instruction token: always the original (steering) probe, in-distribution.
+                    lp = steer_probes.get(l)
+                    if lp is None:
+                        continue
+                    w, b = lp["w"], lp["b"]
+                elif score_mode == "genpos":
+                    if pos >= n_trained_pos:
+                        continue
                     lp = score_probes.get(l, {}).get(pos)
                     if lp is None:
                         continue
@@ -378,7 +385,7 @@ def plot(data, out_path, plot_positions):
         if prompt:
             xs = [l for l in all_layers if str(l) in prompt]
             ax.plot(xs, [prompt[str(l)]["mean"] for l in xs], color=PROMPT_C, linewidth=1.6,
-                    linestyle="--", zorder=4, label="prompt token")
+                    linestyle="--", zorder=4, label="post-instr tok (orig probe)")
 
         # One line per generated position, colour-graded.
         for i, p in enumerate(draw_pos):
