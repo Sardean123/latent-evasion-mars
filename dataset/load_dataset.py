@@ -12,6 +12,7 @@ PROCESSED_DATASET_NAMES = [
     "harmbench_val",
     "harmbench_test",
     "harmbench_standard",
+    "truthfulqa",
     "strong_reject",
     "harmless_val",
 ]
