@@ -90,9 +90,31 @@ def _resolve_harmbench_judge_config(judge: str) -> dict:
     return HARMBENCH_JUDGE_CONFIGS[judge_key]
 
 
+def _ensure_hf_transfer_available() -> None:
+    """If HF_HUB_ENABLE_HF_TRANSFER=1 but the hf_transfer package is missing, downloading a
+    judge model raises ValueError mid-download. Detect that and fall back to the normal
+    downloader (env var + the already-cached huggingface_hub constant, which is read at import)."""
+    if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "0") != "1":
+        return
+    try:
+        import hf_transfer  # noqa: F401
+        return  # available -- keep the fast path
+    except Exception:
+        pass
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+    try:
+        import huggingface_hub.constants as _hf_constants
+        _hf_constants.HF_HUB_ENABLE_HF_TRANSFER = False
+    except Exception:
+        pass
+    print("hf_transfer requested (HF_HUB_ENABLE_HF_TRANSFER=1) but not installed; "
+          "falling back to the standard downloader for this run.")
+
+
 def _load_harmbench_tokenizer(model_name: str = HARMBENCH_MODEL):
     from transformers import AutoTokenizer
 
+    _ensure_hf_transfer_available()
     try:
         return AutoTokenizer.from_pretrained(model_name)
     except ImportError as exc:
