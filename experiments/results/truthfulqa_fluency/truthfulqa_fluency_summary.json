@@ -1,0 +1,39 @@
+{
+  "judge": "llama3-8b",
+  "self_judge": true,
+  "summary": {
+    "baseline": {
+      "mean_fluency": 1.4805405405405405,
+      "n_scored": 740,
+      "dist": {
+        "0": 6,
+        "1": 47,
+        "2": 687
+      },
+      "n_empty": 0,
+      "n_parse_fail": 50
+    },
+    "paper": {
+      "mean_fluency": 1.4296725784447477,
+      "n_scored": 733,
+      "dist": {
+        "0": 13,
+        "1": 89,
+        "2": 631
+      },
+      "n_empty": 0,
+      "n_parse_fail": 57
+    },
+    "hlmean": {
+      "mean_fluency": 1.4696091644204852,
+      "n_scored": 742,
+      "dist": {
+        "0": 6,
+        "1": 56,
+        "2": 680
+      },
+      "n_empty": 0,
+      "n_parse_fail": 48
+    }
+  }
+}
