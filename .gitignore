@@ -41,3 +41,14 @@ vscode_cli.tar.gz
 # --- Secrets ---
 .env
 *.pem
+
+# Run stdout logs (progress bars, regenerable); the run scripts logs/*.sh ARE tracked.
+logs/*.log
+
+# Per-item judge output for HARMFUL completions: *_graded.json embeds the full responses.
+# The paired *summary* JSONs (scores only, no text) are tracked. Same rule as model_outputs/.
+experiments/results/answer_quality/*_graded.json
+
+# Machine-specific symlink to the completions store on the RunPod volume. Recreate with:
+#   ln -s /workspace/lem-durable/repo-backup/completions completions
+/completions

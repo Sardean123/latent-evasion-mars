@@ -1,4 +1,4 @@
-"""TruthfulQA MC1/MC2 accuracy under CLE-P steering -- a coherence/capability-retention proxy.
+"""TruthfulQA MC1/MC2 accuracy under CLE steering -- a coherence/capability-retention proxy.
 
 TruthfulQA MC scores answers by LOG-PROBABILITY (no generation): for each question the model
 assigns a likelihood to every reference answer.
@@ -7,17 +7,29 @@ assigns a likelihood to every reference answer.
 If steering makes the model incoherent, its ability to prefer true over false answers drops,
 so MC1/MC2 fall below the unsteered baseline.
 
-We run three conditions in one model load, applying the SAME projection_hook CLE-P uses during
-the answer-scoring forwards (so the steered model is scored, not the base model):
+We run three conditions in one model load, applying the same intervention the chosen CLE
+variant uses at inference during the answer-scoring forwards (so the steered model is scored,
+not the base model):
   * baseline : no steering
   * paper    : CLE paper BO-optimized per-layer margins (Fig 7b)
   * hlmean   : BO-free harmless-mean margins
+
+--method selects the variant, mirroring what cle-p.py / cle-a.py do at generation time:
+  * clep : projection_hook active at the window layers for every scored position (cle-p.py
+           keeps the projection on throughout prefill and decoding).
+  * clea : per-question additive delta. A prompt-only forward with the projection hook
+           captures the last-prompt-token delta per layer (cle-a.py's compute_additive_deltas),
+           and that fixed delta is then added at every position of the answer-scoring forward
+           (cle-a.py's add_hook during generation). Deltas are recomputed per question because
+           they depend on the prompt.
+
 Answers are scored batched per question (context is shared, answers right-padded); raw summed
 token log-probs, matching lm-eval's truthfulqa_mc. Reports MC1/MC2 overall, per category, and
 the delta vs baseline.
 
 Usage:
     python experiments/truthfulqa_mc.py --model_name llama3-8b --layers 11-18
+    python experiments/truthfulqa_mc.py --method clea
 """
 import argparse
 import json
@@ -30,8 +42,8 @@ from tqdm import tqdm
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from utils.args import parse_layers_arg
-from utils.hooks import projection_hook, remove_hooks
+from utils.args import gate_tag, parse_layers_arg, resolve_gate_thresholds
+from utils.hooks import add_hook, gated_projection_hook, pipeline_delta_hook, projection_hook, remove_hooks
 from utils.models_utils import get_transformer_layers
 from utils.probes import load_probes
 from utils.runtime import load_model, set_seed
@@ -74,19 +86,69 @@ def answer_loglikes(model, context_ids, answers, max_batch=16):
     return out
 
 
-def score_condition(model, layers, window, probes, margins, questions, cats):
+def clea_deltas(model, layers, window, probes, margins, context_ids):
+    """CLE-A's compute_additive_deltas: prompt-only forward with the projection hook, keeping
+    the per-layer delta at the last prompt token. Returned as 1-D tensors so add_hook
+    broadcasts them across the answer batch and all positions.
+
+    Also returns the clean (pre-steering) activation norm at that position per layer, so the
+    caller can report ||delta|| as a fraction of it."""
+    deltas, clean_norms = {}, {}
+
+    def norm_probe(layer_idx):
+        def hook(module, inputs, output):
+            h = output[0] if isinstance(output, tuple) else output
+            clean_norms[layer_idx] = float(h[:, -1, :].float().norm())
+        return hook
+
     handles = []
-    if margins is not None:
+    for l in window:
+        # the norm probe must run BEFORE the steering hook to see the clean activation
+        handles.append(layers[l].register_forward_hook(norm_probe(l)))
+        handles.append(layers[l].register_forward_hook(
+            pipeline_delta_hook(probes[l]["w"], probes[l]["b"], 1.0, margins[l], l, deltas)))
+    try:
+        with torch.no_grad():
+            model.model(input_ids=context_ids)
+    finally:
+        remove_hooks(handles)
+    missing = [l for l in window if l not in deltas]
+    if missing:
+        raise RuntimeError(f"Failed to capture CLE-A deltas for layers: {missing}")
+    return {l: deltas[l][0] for l in window}, clean_norms  # (1, D) -> (D,)
+
+
+def score_condition(model, layers, window, probes, margins, questions, cats, method="clep", gate_c="0"):
+    handles = []
+    gate_stats = {}
+    if margins is not None and method == "clep":
         handles = [layers[l].register_forward_hook(
             projection_hook(probes[l]["w"], probes[l]["b"], 1.0, margins[l])) for l in window]
+    elif margins is not None and method == "clepstar":
+        gate_map = resolve_gate_thresholds(gate_c, margins)
+        handles = [layers[l].register_forward_hook(
+            gated_projection_hook(probes[l]["w"], probes[l]["b"], 1.0, margins[l], gate_map[l],
+                                  gate_stats.setdefault(l, {}))) for l in window]
     mc1_hits, mc2_vals = [], []
     per_cat = {}
+    # CLE-A only: how hard does the intervention actually push on these (benign) prompts?
+    # ||delta|| relative to the clean activation norm at the same position, per window layer.
+    delta_rel = {l: [] for l in window}
     try:
         for q in tqdm(questions, desc="scoring", leave=False):
             ctx = model.prepare_inputs(q["question"]).input_ids
             mc1, mc2 = q["mc1_targets"], q["mc2_targets"]
             answers = list(dict.fromkeys(list(mc1) + list(mc2)))  # unique, score once
-            ll = dict(zip(answers, answer_loglikes(model, ctx, answers)))
+            per_q = []
+            if margins is not None and method == "clea":
+                deltas, clean_norms = clea_deltas(model, layers, window, probes, margins, ctx)
+                per_q = [layers[l].register_forward_hook(add_hook(deltas[l])) for l in window]
+                for l in window:
+                    delta_rel[l].append(float(deltas[l].norm() / clean_norms[l]))
+            try:
+                ll = dict(zip(answers, answer_loglikes(model, ctx, answers)))
+            finally:
+                remove_hooks(per_q)
             # MC1: argmax over mc1 answers must be the (single) correct one
             best = max(mc1, key=lambda a: ll[a])
             mc1_hit = int(mc1[best] == 1)
@@ -102,11 +164,19 @@ def score_condition(model, layers, window, probes, margins, questions, cats):
     finally:
         remove_hooks(handles)
     mean = lambda xs: sum(xs) / len(xs) if xs else 0.0
-    return {
+    out = {
         "mc1": mean(mc1_hits), "mc2": mean(mc2_vals), "n": len(mc1_hits),
         "per_category": {c: {"mc1": mean(v["mc1"]), "mc2": mean(v["mc2"]), "n": len(v["mc1"])}
                          for c, v in sorted(per_cat.items())},
     }
+    if any(delta_rel[l] for l in window):
+        # mean ||delta|| / ||h|| at the steered position, per layer (h = unsteered at that layer)
+        out["delta_rel_norm"] = {str(l): mean(delta_rel[l]) for l in window}
+    if gate_stats:
+        # CLE-P* only: fraction of scored positions the gate let through, per layer
+        out["gate_rate"] = {str(l): float(s["fired"] / s["total"])
+                            for l, s in sorted(gate_stats.items()) if float(s.get("total", 0)) > 0}
+    return out
 
 
 def main():
@@ -114,6 +184,12 @@ def main():
     ap.add_argument("--model_name", default="llama3-8b")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--layers", default="11-18")
+    ap.add_argument("--method", default="clep", choices=["clep", "clea", "clepstar"],
+                    help="Which CLE variant's intervention to apply while scoring (see module docstring).")
+    ap.add_argument("--gate_c", default="0",
+                    help="CLE-P* only: gate threshold, absolute ('0') or as a fraction of the "
+                         "layer margin ('-0.5m' = halfway between -m_l and the boundary; "
+                         "'-1m'/'relu' = never steer backwards).")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out_dir", default=os.path.join(ROOT, "experiments/results/truthfulqa_mc"))
@@ -140,17 +216,24 @@ def main():
              "hlmean": {l: m for l, m in zip(window, HLMEAN)}}
     results = {}
     for name, margins in conds.items():
-        print(f"\n=== condition: {name}  margins={margins} ===")
-        results[name] = score_condition(model, layers, window, probes, margins, mc, cats)
+        print(f"\n=== condition: {name}  method={args.method}  margins={margins} ===")
+        results[name] = score_condition(model, layers, window, probes, margins, mc, cats,
+                                        method=args.method, gate_c=args.gate_c)
         r = results[name]
         print(f"  MC1={r['mc1']*100:.1f}%  MC2={r['mc2']*100:.1f}%  (n={r['n']})")
 
     os.makedirs(args.out_dir, exist_ok=True)
-    out = os.path.join(args.out_dir, f"truthfulqa_mc_{args.model_name}_layers{args.layers.replace('-','to')}.json")
-    json.dump({"model": args.model_name, "window": window, "conditions": results,
+    # The original CLE-P result file has no method suffix; keep that name stable.
+    suffix = "" if args.method == "clep" else f"_{args.method}"
+    if args.method == "clepstar":
+        suffix += gate_tag(args.gate_c)
+    out = os.path.join(args.out_dir,
+                       f"truthfulqa_mc_{args.model_name}_layers{args.layers.replace('-','to')}{suffix}.json")
+    json.dump({"model": args.model_name, "method": args.method, "gate_c": args.gate_c,
+               "window": window, "conditions": results,
                "margins": {"paper": PAPER, "hlmean": HLMEAN}}, open(out, "w"), indent=2)
 
-    print("\n===== TruthfulQA MC (relative to baseline) =====")
+    print(f"\n===== TruthfulQA MC ({args.method}, relative to baseline) =====")
     b = results["baseline"]
     print(f"{'condition':>10} {'MC1':>8} {'ΔMC1':>8} {'MC2':>8} {'ΔMC2':>8}")
     for name in ("baseline", "paper", "hlmean"):

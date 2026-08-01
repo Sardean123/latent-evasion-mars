@@ -45,6 +45,38 @@ def build_margin_tag(args, selected_layers: List[int], layer_margin_map: Dict[in
     return build_marginvec_tag(selected_layers, layer_margin_map)
 
 
+def resolve_gate_thresholds(gate_c: str, layer_margin_map: Dict[int, float]) -> Dict[int, float]:
+    """Map a --gate_c spec to a per-layer CLE-P* threshold in raw probe-score units.
+
+    Accepted forms:
+      '0', '1.5', '-inf'  -- an absolute threshold, the same at every layer
+      '-0.5m', '-1m'      -- a fraction of that layer's own margin, so the gate tracks a
+                             per-layer margin schedule instead of being pinned to one number.
+                             '-1m' = -m_l (never steer backwards); '-0.5m' = halfway between
+                             -m_l and the probe boundary; '0m' = 0.
+      'relu'              -- alias for '-1m'
+    """
+    token = str(gate_c).strip().lower()
+    if token == "relu":
+        token = "-1m"
+    if token.endswith("m"):
+        frac = float(token[:-1])
+        return {layer_idx: frac * margin for layer_idx, margin in layer_margin_map.items()}
+    value = float(token)
+    return {layer_idx: value for layer_idx in layer_margin_map}
+
+
+def gate_tag(gate_c: str) -> str:
+    """Filename-safe tag for a --gate_c spec. 'relu' keeps its own tag for continuity with the
+    runs made before the fractional syntax existed (it is identical to '-1m')."""
+    token = str(gate_c).strip().lower()
+    if token == "relu":
+        return "_gaterelu"
+    if token.endswith("m"):
+        return f"_gate{float(token[:-1]):g}m".replace("-", "neg")
+    return f"_gate{float(token):g}".replace("-", "neg")
+
+
 def build_run_tag(args, selected_layers: List[int], layer_margin_map: Dict[int, float]) -> str:
     if isinstance(args.layers, str) and args.layers.strip().lower() == "all":
         layers_str = "all"

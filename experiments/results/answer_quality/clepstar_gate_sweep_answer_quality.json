@@ -1,0 +1,53 @@
+{
+  "judge": "meta-llama/Meta-Llama-3-8B-Instruct",
+  "self_judge": true,
+  "scored_subset": "asr_positive",
+  "max_reason_tokens": 160,
+  "summary": {
+    "CLE-P* -0.75m": {
+      "n_total": 200,
+      "n_asr_positive": 172,
+      "n_judged": 172,
+      "mean_quality": 1.813953488372093,
+      "dist": {
+        "0": 12,
+        "1": 8,
+        "2": 152
+      },
+      "mean_score_token_mass": 0.992664750232253,
+      "asr": 0.86,
+      "effective_asr_strict": 0.76,
+      "effective_asr_loose": 0.8
+    },
+    "CLE-P* -0.5m": {
+      "n_total": 200,
+      "n_asr_positive": 168,
+      "n_judged": 168,
+      "mean_quality": 1.8035714285714286,
+      "dist": {
+        "0": 9,
+        "1": 15,
+        "2": 144
+      },
+      "mean_score_token_mass": 0.9952759487288338,
+      "asr": 0.84,
+      "effective_asr_strict": 0.72,
+      "effective_asr_loose": 0.795
+    },
+    "CLE-P* -0.25m": {
+      "n_total": 200,
+      "n_asr_positive": 150,
+      "n_judged": 150,
+      "mean_quality": 1.7733333333333334,
+      "dist": {
+        "0": 8,
+        "1": 18,
+        "2": 124
+      },
+      "mean_score_token_mass": 0.9955758794148764,
+      "asr": 0.75,
+      "effective_asr_strict": 0.62,
+      "effective_asr_loose": 0.71
+    }
+  }
+}
