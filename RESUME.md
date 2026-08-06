@@ -25,6 +25,18 @@ pip uninstall -y torchvision torchaudio
 `requirements.txt` additionally pins vllm and optuna; neither is imported by anything used in
 these experiments (only `optuna_search.py` needs optuna), so both are skipped above.
 
+Alternative that also works and is faster (used on the 2026-08-06 restart): **keep the base
+image's torch 2.8.0+cu128** and install everything else against it, which avoids the ~3 GB torch
+download and the torchvision/torchaudio uninstall entirely, since the shipped torchvision matches
+2.8. Add `peft` and `datasets` if you are running the StrongREJECT judge, and `matplotlib` for
+the plot scripts:
+
+```bash
+pip install --no-cache-dir transformers==4.57.6 tokenizers==0.22.2 accelerate==1.2.0 \
+  peft==0.18.1 safetensors==0.7.0 sentencepiece==0.2.1 scikit-learn==1.8.0 \
+  huggingface_hub==0.36.2 datasets==4.8.4 tqdm matplotlib
+```
+
 Environment variables the runs rely on (confirm they survive the restart; re-export if not):
 
 ```bash
@@ -98,11 +110,13 @@ Established 2026-08-06:
   distribution. Writes `strongreject_score`, never `is_jailbreak_*` and no ASR (the benchmark
   defines no threshold), so it composes with the HarmBench judges over the same completions.
   Tests: `tests/test_strongreject_integration.py` (needs GPU), `tests/smoke_strongreject.py`.
-- **`bo-external` looks like it was optimized for CLE-A.** It helps CLE-A (91.0% vs 76.5% ASR)
-  and hurts CLE-P (84.5 vs 88.0 ASR, 0.586 vs 0.678 StrongREJECT), with both judges agreeing on
-  the sign in both cases. That is an interaction, not a level shift. Single seed, no intervals;
-  the CLE-P ASR gap alone is inside n=200 noise. This is evidence, not an answer — the registry
-  still says `optimized_for: unknown` and only the provider can settle it.
+- **`bo-external` was optimized for CLE-A — confirmed by the provider on 2026-08-06.** The
+  registry's `optimized_for` is now `cle-a`, not `unknown`. The empirical signal had already
+  pointed there: it helps CLE-A (91.0% vs 76.5% ASR) and hurts CLE-P (84.5 vs 88.0 ASR, 0.586 vs
+  0.678 StrongREJECT), with both judges agreeing on the sign in both cases — an interaction, not
+  a level shift. **Consequence: the CLE-P/bo-external row is method-mismatched** and is not a
+  fair CLE-P result; the clean CLE-P comparison is paper-fig7b (also CLE-A-tuned, so also
+  mismatched) vs hlmean. Single seed, no intervals; the CLE-P ASR gap alone is inside n=200 noise.
 - **The two judges reorder the table.** ASR ranks CLE-A/bo-external first, StrongREJECT ranks
   CLE-P/hlmean first, and CLE-A/hlmean beats CLE-P/bo-external on StrongREJECT despite 8 points
   less ASR. Same soft-breakage effect `answer_quality.py` found, now confirmed by an independent
@@ -115,13 +129,12 @@ Established 2026-08-06:
 
 ## 4. Immediate next steps (in the order I would do them)
 
-0. **Coherence for the two `bo-external` cells** — the 4-row tradeoff table is otherwise
-   complete. `truthfulqa_mc.py` is still hardcoded to the `{baseline, paper, hlmean}` conditions
-   and does not know registry schedule names; generalizing that is ~10 lines, then two n=790
-   scoring runs (~40 min, mostly CLE-A because it recomputes deltas per question). Without this
-   the best-ASR run (CLE-A/bo-external, 91.0%) has no coherence cost attached.
-   Also worth the cheap paired McNemar over the shared 200 prompts to firm up the interaction
-   claim above — the machinery already exists and single-seed point estimates are all we have.
+0. **Paired McNemar over the shared 200 prompts** for the bo-external-vs-hlmean contrasts, to
+   put an interval on the interaction claim above. The machinery already exists
+   (`## Significance` in RESULTS_SUMMARY.md) and single-seed point estimates are all we have.
+   *(Done: `truthfulqa_mc.py --schedules <registry names>` now takes any schedule, and the
+   CLE-A/bo-external coherence cell is filled. CLE-P/bo-external is still blank, but that row is
+   now known-method-mismatched, so it is a curiosity rather than a gap.)*
 1. **Re-run fluency under constrained scoring** so those numbers are trustworthy, and fix the
    distribution columns in `experiments/results/truthfulqa_fluency/README.md`:
    ```bash

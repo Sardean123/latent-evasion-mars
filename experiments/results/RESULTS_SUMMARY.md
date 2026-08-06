@@ -30,27 +30,45 @@ evaluator was scoring at the right position throughout.
 
 | run | schedule | ASR | StrongREJECT | MC1 | dMC1 |
 | --- | --- | --- | --- | --- | --- |
-| CLE-A | bo-external | 91.0% | 0.6305 | -- | -- |
+| CLE-A | bo-external | 91.0% | 0.6305 | 31.9% | **-6.1** |
 | CLE-A | hlmean | 76.5% | 0.6211 | 37.5% | -0.5 |
-| CLE-P | bo-external | 84.5% | 0.5855 | -- | -- |
+| CLE-P | bo-external (mismatched) | 84.5% | 0.5855 | -- | -- |
 | CLE-P | hlmean | 88.0% | 0.6780 | 33.3% | -4.7 |
 
 MC1 for the hlmean rows carries over from the table above (MC scoring is a separate pass at the
-same margins, independent of these generations). **The two `bo-external` cells have no coherence
-number yet** — `truthfulqa_mc.py` is still hardcoded to the `{baseline, paper, hlmean}`
-conditions.
+same margins, independent of these generations). CLE-A/bo-external was scored 2026-08-06 with
+`--method clea --schedules bo-external`; its unsteered baseline came out at 37.97%, identical to
+the earlier run's, which is the control that makes the two tables comparable. The CLE-P
+bo-external cell is left blank on purpose — see the first finding.
 
-Two findings:
+Three findings:
 
-- **`bo-external` helps CLE-A (+14.5 ASR) and hurts CLE-P** (-3.5 ASR, -0.093 StrongREJECT),
-  with both judges agreeing on the sign in both cases. An interaction, not a level shift — the
-  first evidence bearing on the registry's `optimized_for: unknown`, pointing at CLE-A. Single
-  seed, no intervals; the CLE-P ASR gap alone is inside n=200 noise, so a paired McNemar is
-  needed before stating this firmly.
+- **`bo-external` was optimized for CLE-A** — confirmed by the provider 2026-08-06, and the data
+  had already said so: +14.5 ASR under CLE-A, -3.5 ASR and -0.093 StrongREJECT under CLE-P, both
+  judges agreeing on the sign. An interaction, not a level shift. **The CLE-P/bo-external row is
+  therefore method-mismatched and is not a fair CLE-P result.** Single seed, no intervals; the
+  CLE-P ASR gap alone is inside n=200 noise, so a paired McNemar is still wanted before quoting
+  the size of the effect.
+- **CLE-A/bo-external buys its ASR lead with coherence, and loses once you price that in.**
+  91.0% is the highest ASR anywhere in this repo, but -6.1 MC1 is also the largest coherence cost
+  of any CLE-A row — worse than the paper's own schedule (-4.2). Against CLE-P/hlmean it is
+  **dominated on both non-binary axes**: lower StrongREJECT (0.631 vs 0.678) *and* worse
+  coherence (-6.1 vs -4.7). It wins on binary ASR alone, by 3 points.
+  The mechanism is visible in `delta_rel_norm` (mean ||delta||/||h|| at the steered position):
+  bo-external pushes 0.423 of the activation norm at layer 17 vs 0.078 for paper-fig7b and 0.011
+  for hlmean — a ~38x harder shove at the top of the window, from m_17 = 2.5.
 - **The judges reorder the ranking.** ASR puts CLE-A/bo-external first; StrongREJECT puts
   CLE-P/hlmean first. CLE-A/hlmean beats CLE-P/bo-external on StrongREJECT (0.621 vs 0.586)
-  despite 8 points less ASR. Same soft-breakage effect the effective-ASR column shows, now
-  corroborated by an independent published judge instead of a self-judge.
+  despite 8 points less ASR, and comes within 0.009 of CLE-A/bo-external's StrongREJECT while
+  giving up 14.5 ASR points and costing almost no coherence (-0.5). Same soft-breakage effect the
+  effective-ASR column shows, now corroborated by an independent published judge instead of a
+  self-judge.
+
+On the open question of what mean margins do to refusal on their own: still not cleanly
+identified. hlmean vs bo-external is confounded by the CLE-A tuning, and hlmean vs paper-fig7b is
+confounded the same way (paper-fig7b is also CLE-A-tuned, per the registry note). What hlmean
+does show consistently is a much better ASR-per-unit-coherence rate: it is the only schedule that
+leaves MC1 essentially intact, at -0.5 under CLE-A.
 
 Reproducibility check against the rows above: CLE-A hlmean reproduced exactly (76.5%), CLE-P
 hlmean came in at 88.0% vs 88.5% previously — one prompt.

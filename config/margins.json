@@ -39,9 +39,9 @@
         "bo-external": {
           "layers": "11-18",
           "margins": [1.3, 1.45, 1.3, 1.65, 2.2, 1.05, 2.5],
-          "optimized_for": "unknown",
-          "provenance": "Bayesian-optimized margins for llama3-8b, supplied externally on 2026-08-05. The provider did not state whether the optimization targeted CLE-A or CLE-P.",
-          "note": "optimized_for is genuinely unknown, not merely unrecorded. The decision on record is to run it under BOTH variants and accept that one of the two is method-mismatched; which one is unresolved. Do not silently resolve this field -- it needs an answer from the provider."
+          "optimized_for": "cle-a",
+          "provenance": "Bayesian-optimized margins for llama3-8b, supplied externally on 2026-08-05. Confirmed by the provider on 2026-08-06 to have been optimized against CLE-A.",
+          "note": "Resolved from 'unknown' to 'cle-a' on 2026-08-06. Runs that used this schedule under CLE-P (experiments/results/RESULTS_SUMMARY.md, StrongREJECT re-run) are therefore method-mismatched and cannot be read as a fair CLE-P result. The empirical signal agreed with this before the confirmation arrived: bo-external gained +14.5 ASR under CLE-A and lost ASR and StrongREJECT under CLE-P."
         }
       }
     }

@@ -46,7 +46,7 @@ for name, expect_layers, expect_first in [("hlmean", "11-18", 1.08),
 
 print("\n[2] mismatch warnings fire on the right combinations")
 cases = [("paper-fig7b", "cle-a", False), ("paper-fig7b", "cle-p", True),
-         ("bo-external", "cle-a", True), ("bo-external", "cle-p", True),
+         ("bo-external", "cle-a", False), ("bo-external", "cle-p", True),
          ("hlmean", "cle-a", False), ("hlmean", "cle-p", False)]
 for name, method, want_warn in cases:
     lines = describe_margin_schedule(resolve_margin_schedule("llama3-8b", name), method=method)

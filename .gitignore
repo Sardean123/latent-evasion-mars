@@ -52,3 +52,6 @@ experiments/results/answer_quality/*_graded.json
 # Machine-specific symlink to the completions store on the RunPod volume. Recreate with:
 #   ln -s /workspace/lem-durable/repo-backup/completions completions
 /completions
+
+# Claude Code local settings (machine-specific tool permissions)
+.claude/

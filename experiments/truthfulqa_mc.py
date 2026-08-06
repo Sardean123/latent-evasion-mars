@@ -13,12 +13,11 @@ and not at all with MC2 (~59%), so MC1 is the comparable metric. MC2 is still co
 saved in the result JSON, but it is not what the summary table reports. Note the paper also
 evaluates MMLU and ARC, which this repo does not; the coherence axis here is narrower.
 
-We run three conditions in one model load, applying the same intervention the chosen CLE
-variant uses at inference during the answer-scoring forwards (so the steered model is scored,
-not the base model):
-  * baseline : no steering
-  * paper    : CLE paper BO-optimized per-layer margins (Fig 7b)
-  * hlmean   : BO-free harmless-mean margins
+We run an unsteered baseline plus one condition per margin schedule named in --schedules, all
+in one model load, applying the same intervention the chosen CLE variant uses at inference
+during the answer-scoring forwards (so the steered model is scored, not the base model).
+Schedules are resolved from config/margins.json by name; --schedules defaults to
+`paper-fig7b,hlmean`, which reproduces the historical three-condition layout and filename.
 
 --method selects the variant, mirroring what cle-p.py / cle-a.py do at generation time:
   * clep : projection_hook active at the window layers for every scored position (cle-p.py
@@ -36,6 +35,7 @@ the delta vs baseline.
 Usage:
     python experiments/truthfulqa_mc.py --model_name llama3-8b --layers 11-18
     python experiments/truthfulqa_mc.py --method clea
+    python experiments/truthfulqa_mc.py --method clea --schedules bo-external
 """
 import argparse
 import json
@@ -49,7 +49,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from utils.args import gate_tag, parse_layers_arg, resolve_gate_thresholds
-from utils.margin_utils import resolve_margin_schedule
+from utils.margin_utils import describe_margin_schedule, resolve_margin_schedule
 from utils.hooks import add_hook, gated_projection_hook, pipeline_delta_hook, projection_hook, remove_hooks
 from utils.models_utils import get_transformer_layers
 from utils.probes import load_probes
@@ -57,8 +57,13 @@ from utils.runtime import load_model, set_seed
 
 # Margin schedules come from config/margins.json, never from literals here -- see that file for
 # provenance and for which CLE variant each schedule was optimized against.
-PAPER = resolve_margin_schedule("llama3-8b", "paper-fig7b")["margins"]
-HLMEAN = resolve_margin_schedule("llama3-8b", "hlmean")["margins"]
+DEFAULT_SCHEDULES = "paper-fig7b,hlmean"
+# Historical condition keys, kept so existing result JSONs and experiments/plot_clep_tradeoff.py
+# (which indexes conditions["paper"]) stay readable. New schedules key by their registry name.
+LEGACY_COND_NAME = {"paper-fig7b": "paper"}
+# --method names the scoring-time intervention; the registry records the CLE variant a schedule
+# was tuned for, so they have to be mapped onto each other to check for a mismatch.
+METHOD_VARIANT = {"clep": "cle-p", "clea": "cle-a", "clepstar": "cle-p"}
 
 
 def answer_loglikes(model, context_ids, answers, max_batch=16):
@@ -199,17 +204,34 @@ def main():
                     help="CLE-P* only: gate threshold, absolute ('0') or as a fraction of the "
                          "layer margin ('-0.5m' = halfway between -m_l and the boundary; "
                          "'-1m'/'relu' = never steer backwards).")
+    ap.add_argument("--schedules", default=DEFAULT_SCHEDULES,
+                    help="Comma-separated margin-schedule names from config/margins.json to score, "
+                         "one condition each, alongside the always-present unsteered baseline. "
+                         f"Default {DEFAULT_SCHEDULES!r}.")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out_dir", default=os.path.join(ROOT, "experiments/results/truthfulqa_mc"))
     args = ap.parse_args()
 
+    schedule_names = [s.strip() for s in args.schedules.split(",") if s.strip()]
+    if not schedule_names:
+        raise ValueError("--schedules resolved to no schedules; pass at least one registry name")
+    # Resolve and validate BEFORE the model load: a bad schedule name should fail in a second,
+    # not after 8B parameters have come off disk.
+    entries = [resolve_margin_schedule(args.model_name, name) for name in schedule_names]
+    for entry in entries:
+        if entry["layers"] != args.layers:
+            raise ValueError(
+                f"schedule {entry['name']!r} is defined for layers {entry['layers']!r} but "
+                f"--layers is {args.layers!r}; margins would be applied to the wrong layers")
+        for line in describe_margin_schedule(entry, method=METHOD_VARIANT[args.method]):
+            print(line)
+        print()
+
     set_seed(args.seed)
     model = load_model(args)
     layers = get_transformer_layers(model)
     window = parse_layers_arg(args.layers, len(layers))
-    if len(window) != len(PAPER):
-        raise ValueError(f"window {window} has {len(window)} layers but margin schedules have {len(PAPER)}")
     probes = load_probes(probe_type="svm",
                          svm_dir=os.path.join(ROOT, "dataset/representations", args.model_name, "train_svm"),
                          layer_indices=window, device=torch.device("cpu"))
@@ -220,9 +242,10 @@ def main():
     if args.limit:
         mc = mc[: args.limit]
 
-    conds = {"baseline": None,
-             "paper": {l: m for l, m in zip(window, PAPER)},
-             "hlmean": {l: m for l, m in zip(window, HLMEAN)}}
+    conds = {"baseline": None}
+    for entry in entries:
+        conds[LEGACY_COND_NAME.get(entry["name"], entry["name"])] = \
+            {l: m for l, m in zip(window, entry["margins"])}
     results = {}
     for name, margins in conds.items():
         print(f"\n=== condition: {name}  method={args.method}  margins={margins} ===")
@@ -236,11 +259,17 @@ def main():
     suffix = "" if args.method == "clep" else f"_{args.method}"
     if args.method == "clepstar":
         suffix += gate_tag(args.gate_c)
+    # Non-default schedule sets get their own filename so they cannot silently overwrite the
+    # historical results; the default set keeps the original unsuffixed name.
+    if args.schedules != DEFAULT_SCHEDULES:
+        suffix += "_sched" + "+".join(schedule_names)
     out = os.path.join(args.out_dir,
                        f"truthfulqa_mc_{args.model_name}_layers{args.layers.replace('-','to')}{suffix}.json")
     json.dump({"model": args.model_name, "method": args.method, "gate_c": args.gate_c,
                "window": window, "conditions": results,
-               "margins": {"paper": PAPER, "hlmean": HLMEAN}}, open(out, "w"), indent=2)
+               "schedules": schedule_names,
+               "margins": {LEGACY_COND_NAME.get(e["name"], e["name"]): e["margins"] for e in entries}},
+              open(out, "w"), indent=2)
 
     # MC1 is the headline: the CLE paper's Tab. 4/5 report a single TruthfulQA accuracy, and its
     # LLaMA3-8B baseline (37.08) matches MC1 here, not MC2 (which is ~20 points higher). Reported
