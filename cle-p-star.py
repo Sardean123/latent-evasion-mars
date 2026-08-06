@@ -21,8 +21,7 @@ Everything else -- probes, layer window, beta, per-layer margins, datasets, judg
 identical to cle-p.py, so runs are directly comparable.
 
 Usage:
-    python cle-p-star.py --model_name llama3-8b --layers 11-18 \
-        --layer_margins 1.08,1.08,1.1,1.11,1.12,1.14,1.14 --gate_c 0 \
+    python cle-p-star.py --model_name llama3-8b --margin_schedule hlmean --gate_c 0 \
         --dataset harmbench_standard --batch_size 16 --max_new_tokens 512
     python cle-p-star.py ... --gate_c=-1m         # per-layer c = -m_l ('relu' is an alias)
     python cle-p-star.py ... --gate_c=-0.5m       # halfway between -m_l and the boundary
@@ -37,7 +36,13 @@ from typing import Dict, List
 import torch
 from tqdm import tqdm
 
-from utils.args import build_run_tag, gate_tag, parse_layer_margins, parse_layers_arg
+from utils.args import (
+    apply_margin_schedule,
+    build_run_tag,
+    gate_tag,
+    parse_layer_margins,
+    parse_layers_arg,
+)
 from utils.args import resolve_gate_thresholds
 from utils.hooks import gated_projection_hook, remove_hooks
 from utils.models_utils import get_transformer_layers
@@ -110,6 +115,18 @@ def get_args():
         help=(
             "Optional per-layer margins aligned with --layers. Accepts either "
             "space-separated values or comma-separated values."
+        ),
+    )
+    parser.add_argument(
+        "--margin_schedule",
+        type=str,
+        default=None,
+        help=(
+            "Named per-layer margin schedule from config/margins.json (e.g. 'hlmean', "
+            "'paper-fig7b', 'bo-external'). Supplies both --layers and the per-layer margins, "
+            "and tags the run with the schedule name instead of a SHA1 digest. Mutually "
+            "exclusive with --layer_margins. List them with: "
+            "python -m utils.margin_utils --list --model_name <model>"
         ),
     )
 
@@ -204,6 +221,8 @@ def generate_with_gated_projection(
 def main():
     args = get_args()
     set_seed(args.seed)
+    # CLE-P* is a CLE-P variant, so a CLE-A-tuned schedule is flagged as mismatched here too.
+    apply_margin_schedule(args, method="cle-p")
 
     device = torch.device(args.device)
     model = load_model(args)
@@ -288,6 +307,7 @@ def main():
 
     with open(os.path.join(args.out_dir, f"gate_rate_{run_tag}.json"), "w") as f:
         json.dump({"gate_c": args.gate_c, "gate_map": {str(k): v for k, v in gate_map.items()},
+                   "margin_schedule": args.margin_schedule,
                    "layer_margins": {str(k): v for k, v in layer_margin_map.items()},
                    "gate_rate": gate_rate}, f, indent=2)
 

@@ -15,14 +15,14 @@ cd /workspace/lem-durable/repo
 while pgrep -f "run_clea_stage2.sh" > /dev/null; do sleep 30; done
 echo "=== GPU free, starting CLE-P* sweep ==="
 
-HLMEAN=1.08,1.08,1.1,1.11,1.12,1.14,1.14
+SCHEDULE=hlmean          # resolved from config/margins.json; also supplies the layer window
 STAR=./completions/llama3-8b/cle-p-star
 GATES="relu 0 0.61"
 
 for C in $GATES; do
   echo "=== [gen] CLE-P* gate_c=$C ==="
   python cle-p-star.py --model_name llama3-8b --device cuda:0 \
-    --layers 11-18 --beta 1.0 --layer_margins $HLMEAN --gate_c "$C" \
+    --beta 1.0 --margin_schedule $SCHEDULE --gate_c "$C" \
     --dataset harmbench_standard --max_new_tokens 512 --batch_size 16 \
     --out_dir $STAR
 done
@@ -30,7 +30,7 @@ echo "=== CLEPSTAR GENERATION DONE ==="
 
 for C in $GATES; do
   case "$C" in relu) TAG=relu ;; *) TAG=$C ;; esac
-  F=completions_harmbench_standard_FULL_layers11to18_beta1.0_marginvece7a04fe44003_seed0_gate${TAG}.json
+  F=completions_harmbench_standard_FULL_layers11to18_beta1.0_margin${SCHEDULE}_seed0_gate${TAG}.json
   echo "=== [judge] CLE-P* gate_c=$C ==="
   python utils/eval_jailbreaks.py \
     --completions_path $STAR/$F \

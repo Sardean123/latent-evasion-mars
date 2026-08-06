@@ -1,6 +1,11 @@
 from typing import Dict, List, Optional
 
-from utils.margin_utils import build_layer_margin_map, build_marginvec_tag
+from utils.margin_utils import (
+    build_layer_margin_map,
+    build_marginvec_tag,
+    describe_margin_schedule,
+    resolve_margin_schedule,
+)
 from utils.models_utils import parse_layers
 
 
@@ -38,7 +43,45 @@ def parse_layer_margins(
     return build_layer_margin_map(selected_layers, default_margin, layer_margins_arg)
 
 
+def apply_margin_schedule(args, method: Optional[str] = None) -> Optional[Dict]:
+    """Resolve --margin_schedule from config/margins.json into args.layers / args.layer_margin.
+
+    Must run before parse_layers_arg, since the schedule supplies the window. Returns the
+    registry entry, or None when --margin_schedule was not passed.
+
+    `method` ('cle-a' or 'cle-p') only drives the printed mismatch warning; it does not change
+    what is applied. A schedule optimized for the other variant is still runnable -- the registry
+    exists so that fact is stated at run time instead of being lost."""
+    schedule_name = getattr(args, "margin_schedule", None)
+    if not schedule_name:
+        return None
+    if args.layer_margin is not None:
+        raise ValueError("--margin_schedule and --layer_margins are mutually exclusive")
+
+    entry = resolve_margin_schedule(args.model_name, schedule_name)
+
+    requested_layers = str(args.layers).strip()
+    if requested_layers.lower() != "all" and requested_layers != entry["layers"]:
+        raise ValueError(
+            f"--layers {requested_layers!r} conflicts with schedule {schedule_name!r}, which is "
+            f"defined for layers {entry['layers']!r}. Omit --layers to take the schedule's window."
+        )
+
+    args.layers = entry["layers"]
+    args.layer_margin = [",".join(f"{m:.8g}" for m in entry["margins"])]
+
+    for line in describe_margin_schedule(entry, method=method):
+        print(line)
+    return entry
+
+
 def build_margin_tag(args, selected_layers: List[int], layer_margin_map: Dict[int, float]) -> str:
+    # A named schedule tags with its own name -- readable, and reversible through the registry.
+    # The SHA1 digest remains the fallback for ad-hoc --layer_margins that are not registered.
+    schedule_name = getattr(args, "margin_schedule", None)
+    if schedule_name:
+        return f"margin{schedule_name}"
+
     if args.layer_margin is None:
         return f"margin{args.margin}"
 

@@ -1,0 +1,49 @@
+{
+  "_README": [
+    "Central registry of hard-coded CLE hyperparameters. Every per-layer margin schedule used",
+    "by cle-a.py / cle-p.py / cle-p-star.py / experiments/* lives here and nowhere else.",
+    "",
+    "Select one with --margin_schedule <name>; it supplies both --layers and --layer_margins,",
+    "and the run tag becomes 'margin<name>' instead of a SHA1 digest.",
+    "",
+    "Field contract per entry:",
+    "  layers        end-exclusive window string, same syntax as --layers ('11-18', '10,14,20')",
+    "  margins       one value per layer in `layers`, in layer order (length is validated on load)",
+    "  optimized_for 'cle-a' | 'cle-p' | 'unknown' | null. Scripts WARN when this contradicts the",
+    "                variant being run; null means method-independent (e.g. derived from data).",
+    "  provenance    where the numbers came from, in enough detail to re-derive or re-request",
+    "  generator     script that reproduces them, when one exists",
+    "  legacy_digest pre-registry marginvec tag, so historical filenames stay decodable",
+    "",
+    "Names use hyphens, never underscores: '_' is the field separator in build_run_tag()."
+  ],
+  "models": {
+    "llama3-8b": {
+      "margin_schedules": {
+        "hlmean": {
+          "layers": "11-18",
+          "margins": [1.08, 1.08, 1.1, 1.11, 1.12, 1.14, 1.14],
+          "optimized_for": null,
+          "provenance": "computed from the harmless training distribution: m_l = |mean(harmless probe scores at layer l)|. No Bayesian optimization, no GPU. Method-independent by construction.",
+          "generator": "python experiments/harmless_mean_schedule.py --model_name llama3-8b --layers 11-18",
+          "legacy_digest": "e7a04fe44003"
+        },
+        "paper-fig7b": {
+          "layers": "11-18",
+          "margins": [1.2, 2.0, 1.8, 1.8, 2.0, 0.9, 1.2],
+          "optimized_for": "cle-a",
+          "provenance": "hand-transcribed from Figure 7b of arXiv 2605.21706 (Piras et al., Latent-space Attacks for Refusal Evasion in Language Models). Not reproducible from this repo.",
+          "legacy_digest": "b9333bab29ae",
+          "note": "Figure 7 is the CLE-A schedule, not CLE-P: panel (a) spans 2.5-4.0 and Table 3 gives LLaMA2-7B CLE-A m=3.1 vs CLE-P m=1.6, so a +/-0.1 walk seeded at 1.6 cannot reach that range. Runs that used this as a CLE-P baseline are therefore method-mismatched. Untested alternative: Table 3's shared CLE-P m=1.3. See RESUME.md:71-74."
+        },
+        "bo-external": {
+          "layers": "11-18",
+          "margins": [1.3, 1.45, 1.3, 1.65, 2.2, 1.05, 2.5],
+          "optimized_for": "unknown",
+          "provenance": "Bayesian-optimized margins for llama3-8b, supplied externally on 2026-08-05. The provider did not state whether the optimization targeted CLE-A or CLE-P.",
+          "note": "optimized_for is genuinely unknown, not merely unrecorded. The decision on record is to run it under BOTH variants and accept that one of the two is method-mismatched; which one is unresolved. Do not silently resolve this field -- it needs an answer from the provider."
+        }
+      }
+    }
+  }
+}

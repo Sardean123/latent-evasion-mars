@@ -6,7 +6,7 @@ from typing import Dict, List
 import torch
 from tqdm import tqdm
 
-from utils.args import build_run_tag, parse_layer_margins, parse_layers_arg
+from utils.args import apply_margin_schedule, build_run_tag, parse_layer_margins, parse_layers_arg
 from utils.hooks import projection_hook, remove_hooks
 from utils.models_utils import get_transformer_layers
 from utils.probes import ProbeDict, load_probes
@@ -80,6 +80,18 @@ def get_args():
             "space-separated values or comma-separated values."
         ),
     )
+    parser.add_argument(
+        "--margin_schedule",
+        type=str,
+        default=None,
+        help=(
+            "Named per-layer margin schedule from config/margins.json (e.g. 'hlmean', "
+            "'paper-fig7b', 'bo-external'). Supplies both --layers and the per-layer margins, "
+            "and tags the run with the schedule name instead of a SHA1 digest. Mutually "
+            "exclusive with --layer_margins. List them with: "
+            "python -m utils.margin_utils --list --model_name <model>"
+        ),
+    )
 
     # Generation / dataset
     parser.add_argument("--dataset", type=str, default="harmbench_test")
@@ -151,6 +163,7 @@ def generate_with_projection(
 def main():
     args = get_args()
     set_seed(args.seed)
+    apply_margin_schedule(args, method="cle-p")
 
     device = torch.device(args.device)
     model = load_model(args)

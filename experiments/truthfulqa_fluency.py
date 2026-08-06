@@ -27,6 +27,7 @@ sys.path.insert(0, ROOT)
 
 from utils.args import gate_tag
 from utils.llm_judge import ConstrainedJudge
+from utils.margin_utils import resolve_margin_schedule
 from utils.runtime import load_model, set_seed
 
 # AxBench fluency prompt, edited per request: "sentence fragment"->"response", and "sentence"
@@ -52,10 +53,15 @@ Briefly explain your evaluation in two or three sentences, then give the score.
 PROJ = os.path.join(ROOT, "completions/llama3-8b/projection")
 CLEA = os.path.join(ROOT, "completions/llama3-8b/cle-a")
 BASELINE = "completions_truthfulqa_FULL_layers11to18_beta0.0_margin0.0_seed0.json"
-RUNS = {  # digests: b9333=paper (Fig 7b), e7a04=hlmean (same margins as the HarmBench runs)
+# These point at completions generated BEFORE config/margins.json existed, so their filenames
+# still carry the SHA1 marginvec tag. The digests are read from the registry's legacy_digest
+# field rather than pasted here, so there is one place that maps a schedule name to its tag.
+# Runs generated with --margin_schedule tag as 'margin<name>' and will not match these patterns.
+_LEGACY = "completions_truthfulqa_FULL_layers11to18_beta1.0_marginvec{digest}_seed0.json"
+RUNS = {
     "baseline": BASELINE,
-    "paper":    "completions_truthfulqa_FULL_layers11to18_beta1.0_marginvecb9333bab29ae_seed0.json",
-    "hlmean":   "completions_truthfulqa_FULL_layers11to18_beta1.0_marginvece7a04fe44003_seed0.json",
+    "paper":    _LEGACY.format(digest=resolve_margin_schedule("llama3-8b", "paper-fig7b")["legacy_digest"]),
+    "hlmean":   _LEGACY.format(digest=resolve_margin_schedule("llama3-8b", "hlmean")["legacy_digest"]),
 }
 # The unsteered baseline is method-independent (beta=0 makes both hooks the identity), so the
 # CLE-A pass reuses the completions already generated in the CLE-P run directory.

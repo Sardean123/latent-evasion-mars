@@ -1,11 +1,17 @@
-"""TruthfulQA MC1/MC2 accuracy under CLE steering -- a coherence/capability-retention proxy.
+"""TruthfulQA MC1 accuracy under CLE steering -- a coherence/capability-retention proxy.
 
 TruthfulQA MC scores answers by LOG-PROBABILITY (no generation): for each question the model
 assigns a likelihood to every reference answer.
   * MC1: the single best-correct answer must get the highest log-prob (1/0 per question).
   * MC2: normalized probability mass placed on ALL correct answers (0-1 per question).
 If steering makes the model incoherent, its ability to prefer true over false answers drops,
-so MC1/MC2 fall below the unsteered baseline.
+so accuracy falls below the unsteered baseline.
+
+MC1 IS THE HEADLINE. The CLE paper (Tab. 4/5, App. H) reports a single TruthfulQA accuracy
+alongside MMLU and ARC; its LLaMA3-8B baseline of 37.08 lines up with MC1 measured here (~38%)
+and not at all with MC2 (~59%), so MC1 is the comparable metric. MC2 is still computed and
+saved in the result JSON, but it is not what the summary table reports. Note the paper also
+evaluates MMLU and ARC, which this repo does not; the coherence axis here is narrower.
 
 We run three conditions in one model load, applying the same intervention the chosen CLE
 variant uses at inference during the answer-scoring forwards (so the steered model is scored,
@@ -43,13 +49,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from utils.args import gate_tag, parse_layers_arg, resolve_gate_thresholds
+from utils.margin_utils import resolve_margin_schedule
 from utils.hooks import add_hook, gated_projection_hook, pipeline_delta_hook, projection_hook, remove_hooks
 from utils.models_utils import get_transformer_layers
 from utils.probes import load_probes
 from utils.runtime import load_model, set_seed
 
-PAPER = [1.2, 2.0, 1.8, 1.8, 2.0, 0.9, 1.2]
-HLMEAN = [1.08, 1.08, 1.1, 1.11, 1.12, 1.14, 1.14]
+# Margin schedules come from config/margins.json, never from literals here -- see that file for
+# provenance and for which CLE variant each schedule was optimized against.
+PAPER = resolve_margin_schedule("llama3-8b", "paper-fig7b")["margins"]
+HLMEAN = resolve_margin_schedule("llama3-8b", "hlmean")["margins"]
 
 
 def answer_loglikes(model, context_ids, answers, max_batch=16):
@@ -220,7 +229,7 @@ def main():
         results[name] = score_condition(model, layers, window, probes, margins, mc, cats,
                                         method=args.method, gate_c=args.gate_c)
         r = results[name]
-        print(f"  MC1={r['mc1']*100:.1f}%  MC2={r['mc2']*100:.1f}%  (n={r['n']})")
+        print(f"  MC1={r['mc1']*100:.1f}%  (MC2={r['mc2']*100:.1f}%)  (n={r['n']})")
 
     os.makedirs(args.out_dir, exist_ok=True)
     # The original CLE-P result file has no method suffix; keep that name stable.
@@ -233,14 +242,19 @@ def main():
                "window": window, "conditions": results,
                "margins": {"paper": PAPER, "hlmean": HLMEAN}}, open(out, "w"), indent=2)
 
-    print(f"\n===== TruthfulQA MC ({args.method}, relative to baseline) =====")
+    # MC1 is the headline: the CLE paper's Tab. 4/5 report a single TruthfulQA accuracy, and its
+    # LLaMA3-8B baseline (37.08) matches MC1 here, not MC2 (which is ~20 points higher). Reported
+    # as unsteered-vs-steered per condition to mirror those tables' before/after layout. MC2 is
+    # still computed and saved in the JSON; it is just no longer the headline.
     b = results["baseline"]
-    print(f"{'condition':>10} {'MC1':>8} {'ΔMC1':>8} {'MC2':>8} {'ΔMC2':>8}")
-    for name in ("baseline", "paper", "hlmean"):
+    print(f"\n===== TruthfulQA MC1 ({args.method}) =====")
+    print(f"{'condition':>10} {'unsteered':>11} {'steered':>9} {'Δ':>7}")
+    for name in results:
+        if name == "baseline":
+            continue
         r = results[name]
-        d1 = (r["mc1"] - b["mc1"]) * 100
-        d2 = (r["mc2"] - b["mc2"]) * 100
-        print(f"{name:>10} {r['mc1']*100:>7.1f}% {d1:>+7.1f} {r['mc2']*100:>7.1f}% {d2:>+7.1f}")
+        print(f"{name:>10} {b['mc1']*100:>10.1f}% {r['mc1']*100:>8.1f}% "
+              f"{(r['mc1'] - b['mc1']) * 100:>+7.1f}")
     print(f"\nSaved {out}")
 
 
