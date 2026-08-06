@@ -41,7 +41,14 @@
           "margins": [1.3, 1.45, 1.3, 1.65, 2.2, 1.05, 2.5],
           "optimized_for": "cle-a",
           "provenance": "Bayesian-optimized margins for llama3-8b, supplied externally on 2026-08-05. Confirmed by the provider on 2026-08-06 to have been optimized against CLE-A.",
-          "note": "Resolved from 'unknown' to 'cle-a' on 2026-08-06. Runs that used this schedule under CLE-P (experiments/results/RESULTS_SUMMARY.md, StrongREJECT re-run) are therefore method-mismatched and cannot be read as a fair CLE-P result. The empirical signal agreed with this before the confirmation arrived: bo-external gained +14.5 ASR under CLE-A and lost ASR and StrongREJECT under CLE-P."
+          "note": "Resolved from 'unknown' to 'cle-a' on 2026-08-06. Runs that used this schedule under CLE-P (experiments/results/RESULTS_SUMMARY.md, StrongREJECT re-run) are therefore method-mismatched and cannot be read as a fair CLE-P result. The empirical signal agreed with this before the confirmation arrived: bo-external gained +14.5 ASR under CLE-A and lost ASR and StrongREJECT under CLE-P. The CLE-P counterpart from the same provider is 'bo-external-clep'. The name is NOT 'bo-external-clea' only because it is already baked into eight result filenames as 'marginbo-external'; treat the two as a matched pair."
+        },
+        "bo-external-clep": {
+          "layers": "11-18",
+          "margins": [1.5, 1.0, 1.9, 1.0, 0.8, 0.9, 1.8],
+          "optimized_for": "cle-p",
+          "provenance": "Bayesian-optimized margins for llama3-8b targeting CLE-P specifically, supplied externally on 2026-08-06 as the counterpart to the CLE-A-tuned 'bo-external'.",
+          "note": "Pairs with 'bo-external' (CLE-A). Having both is what finally makes the CLE-P comparison unconfounded: every prior CLE-P-vs-BO row in RESULTS_SUMMARY.md used a CLE-A-tuned schedule (either 'bo-external' or 'paper-fig7b', per that entry's note), so 'hlmean matches BO under CLE-P' had never actually been tested against a CLE-P-tuned BO. Mean margin 1.27 vs bo-external's 1.61, and the per-layer shape differs: this one peaks at L13/L17 and dips at L15, where bo-external climbs monotonically to a 2.5 spike at L17."
         }
       }
     }

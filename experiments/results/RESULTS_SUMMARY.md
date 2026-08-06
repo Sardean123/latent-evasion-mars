@@ -143,6 +143,53 @@ and the tripwire counts dead items individually (`strongreject_n_low_mass`) inst
 warning on a mean below 0.9. The mean was too blunt — 32 dead items out of 313 still averages
 0.92, so three of the four contaminated runs never warned at all.
 
+## The unconfounded CLE-P comparison, 2026-08-06 (`logs/run_clep_bo.sh`)
+
+`bo-external-clep` is a BO schedule tuned for **CLE-P**, supplied 2026-08-06. Until it arrived,
+every CLE-P-vs-BO row in this file used a CLE-A-tuned schedule (`bo-external` by the provider's
+confirmation, `paper-fig7b` per that registry entry's note on Figure 7), so the claim "hlmean
+holds up against BO" had **never been tested fairly under CLE-P**. This is that test.
+
+| schedule | tuned for | ASR (HB) | SR-judge/HB | SR-313 | ASR-313 | dMC1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| bo-external-clep | cle-p | **90.5%** | 0.6694 | 0.7645 | 88.2% | **-8.6** |
+| hlmean | -- (data) | 88.0% | **0.6780** | **0.7760** | **88.5%** | **-4.7** |
+| bo-external | cle-a (mismatched) | 84.5% | 0.5855 | 0.7129 | 89.5% | -- |
+
+Paired tests, `bo-external-clep` vs `hlmean`:
+
+| axis | n | result | p |
+| --- | --- | --- | --- |
+| HarmBench ASR | 200 | 181 vs 176, discordant 12/7 | McNemar **0.359** — n.s. |
+| SR-313 | 313 | hlmean +0.0114 | Wilcoxon 0.043 / paired t 0.180 |
+| SR-judge/HB | 200 | hlmean +0.0085 | Wilcoxon 0.007 / paired t 0.492 |
+| MC1 | 790 | hlmean +3.9pt | z=1.68, **0.093** (unpaired, conservative) |
+
+**The BO-free claim survives its first fair test under CLE-P.** The +2.5 ASR advantage of the
+CLE-P-tuned BO schedule is not statistically distinguishable from zero (p=0.36), while hlmean is
+non-inferior on both continuous judges and costs roughly **half the coherence** (-4.7 vs -8.6
+MC1). So BO buys no measurable jailbreak effectiveness here and spends ~4 points of MC1 for it.
+
+Read the significance honestly, in both directions:
+
+- On the two StrongREJECT axes, Wilcoxon is significant but the paired t is not. That pattern —
+  a consistent rank shift with an indistinguishable mean shift — is what a heavily left-skewed
+  score distribution produces (median 0.849, 182/313 above 0.8). The right reading is *hlmean
+  wins slightly more often than it loses*, NOT *hlmean scores materially higher*. Effect sizes
+  of 0.01 on a 0-1 scale are small regardless of p.
+- The coherence gap is the largest effect in the table but is the least well tested: `dMC1`
+  p=0.093 is an **unpaired** two-proportion test, which is conservative here because both
+  conditions score the identical 790 questions. A paired McNemar would almost certainly be
+  tighter, but `truthfulqa_mc.py` saves only aggregates and per-category means, not per-question
+  hits, so it cannot be computed from the stored results. Saving the per-question hit vector is
+  a small change and would settle this.
+- Single seed throughout. None of these are averaged over runs.
+
+Both BO schedules land near -8.5 MC1 under CLE-P (`paper-fig7b` -8.4, `bo-external-clep` -8.6)
+while hlmean sits at -4.7. Two independently-derived BO schedules converging on the same
+coherence cost, well apart from the data-derived one, is at least suggestive that BO's objective
+is buying ASR without pricing coherence at all.
+
 ## Pareto frontier (effective ASR vs dMC2)
 
 Note: this frontier is still computed on dMC2. MC1 is the paper-comparable metric (the CLE
