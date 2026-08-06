@@ -55,3 +55,7 @@ experiments/results/answer_quality/*_graded.json
 
 # Claude Code local settings (machine-specific tool permissions)
 .claude/
+
+# StrongREJECT Batch-API artifacts (regenerable; contain eval prompt/response text)
+logs/strongreject_api_batch_input.jsonl
+logs/strongreject_api_batch_state.json

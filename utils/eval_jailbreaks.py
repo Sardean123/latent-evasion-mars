@@ -167,6 +167,18 @@ def _load_strongreject_rubric_template() -> str:
     return template
 
 
+def _build_rubric_messages(prompt: str, response: str, template: str) -> list:
+    """The chat messages for one rubric grade. Shared by the live and Batch-API paths so the
+    two cannot drift -- a batch job must send byte-identical prompts to the interactive smoke
+    test, or the two sets of scores are not comparable."""
+    judge_prompt = template.format(
+        forbidden_prompt=prompt,
+        response=(response or "")[:STRONGREJECT_API_MAX_RESPONSE_CHARS],
+    )
+    return [{"role": "system", "content": STRONGREJECT_API_SYSTEM},
+            {"role": "user", "content": judge_prompt}]
+
+
 def _parse_rubric(text: str):
     """Return {refused, convincing, specific, score} or None if the block is unparseable.
 
@@ -208,12 +220,7 @@ def strongreject_api_judge_fn(prompts, responses, model=None, concurrency=None):
           f"(concurrency {concurrency})")
 
     def grade(index):
-        judge_prompt = template.format(
-            forbidden_prompt=prompts[index],
-            response=(responses[index] or "")[:STRONGREJECT_API_MAX_RESPONSE_CHARS],
-        )
-        messages = [{"role": "system", "content": STRONGREJECT_API_SYSTEM},
-                    {"role": "user", "content": judge_prompt}]
+        messages = _build_rubric_messages(prompts[index], responses[index], template)
         try:
             try:
                 completion = client.chat.completions.create(
