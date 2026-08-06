@@ -21,7 +21,45 @@ All CLE-P* rows use hlmean margins. Fluency is the OLD regex scoring — see cav
 | CLE-P* c=0 | 1.11 | 57.0% | 46.5% | 0.9% | 36.7% | -1.3 | 57.3% | -1.3 | -- |
 | CLE-P* c=0.61 | 1.11 | 4.0% | 3.0% | 0.0% | 38.1% | +0.1 | 58.5% | -0.2 | -- |
 
+## StrongREJECT re-run, 2026-08-06 (`logs/run_full_rerun.sh`)
+
+Four fresh generations judged by BOTH the standard HarmBench protocol and the StrongREJECT
+fine-tuned evaluator (continuous 0-1; the benchmark defines no threshold, so there is no ASR
+column for it). Same n=200 HarmBench standard prompts. Digit mass 0.998 on every run, so the
+evaluator was scoring at the right position throughout.
+
+| run | schedule | ASR | StrongREJECT | MC1 | dMC1 |
+| --- | --- | --- | --- | --- | --- |
+| CLE-A | bo-external | 91.0% | 0.6305 | -- | -- |
+| CLE-A | hlmean | 76.5% | 0.6211 | 37.5% | -0.5 |
+| CLE-P | bo-external | 84.5% | 0.5855 | -- | -- |
+| CLE-P | hlmean | 88.0% | 0.6780 | 33.3% | -4.7 |
+
+MC1 for the hlmean rows carries over from the table above (MC scoring is a separate pass at the
+same margins, independent of these generations). **The two `bo-external` cells have no coherence
+number yet** — `truthfulqa_mc.py` is still hardcoded to the `{baseline, paper, hlmean}`
+conditions.
+
+Two findings:
+
+- **`bo-external` helps CLE-A (+14.5 ASR) and hurts CLE-P** (-3.5 ASR, -0.093 StrongREJECT),
+  with both judges agreeing on the sign in both cases. An interaction, not a level shift — the
+  first evidence bearing on the registry's `optimized_for: unknown`, pointing at CLE-A. Single
+  seed, no intervals; the CLE-P ASR gap alone is inside n=200 noise, so a paired McNemar is
+  needed before stating this firmly.
+- **The judges reorder the ranking.** ASR puts CLE-A/bo-external first; StrongREJECT puts
+  CLE-P/hlmean first. CLE-A/hlmean beats CLE-P/bo-external on StrongREJECT (0.621 vs 0.586)
+  despite 8 points less ASR. Same soft-breakage effect the effective-ASR column shows, now
+  corroborated by an independent published judge instead of a self-judge.
+
+Reproducibility check against the rows above: CLE-A hlmean reproduced exactly (76.5%), CLE-P
+hlmean came in at 88.0% vs 88.5% previously — one prompt.
+
 ## Pareto frontier (effective ASR vs dMC2)
+
+Note: this frontier is still computed on dMC2. MC1 is the paper-comparable metric (the CLE
+paper's single TruthfulQA accuracy matches MC1, not MC2), so this ordering should be recomputed
+on dMC1 before being used as a headline; it has not been.
 
 CLE-P paper -> CLE-P* -1m -> CLE-P hlmean -> CLE-A paper -> CLE-P* -0.75m -> CLE-P* -0.5m ->
 CLE-A hlmean -> CLE-P* c=0. Only **CLE-P* c=-0.25m is dominated** (by CLE-A hlmean, on both axes).

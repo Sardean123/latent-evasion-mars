@@ -87,8 +87,41 @@ Established this session:
   valid; only CLE-P paper's -0.051 is significant (p<1e-4). Both judges now use constrained
   scoring (`utils/llm_judge.py`) which makes off-rubric scores impossible.
 
+Established 2026-08-06:
+
+- **Margins are now named, not pasted.** `config/margins.json` is the registry; scripts take
+  `--margin_schedule <name>` and tag files `margin<name>` instead of a SHA1 digest. Each entry
+  carries provenance and `optimized_for`. `legacy_digest` maps a schedule to its old digest so
+  pre-registry filenames still resolve. Tests: `tests/test_registry.py` (CPU-only, no GPU stack).
+- **StrongREJECT fine-tuned evaluator wired in** as a `strongreject` methodology in
+  `utils/eval_jailbreaks.py`. Continuous 0-1, one forward pass, expected value of the 1..5 token
+  distribution. Writes `strongreject_score`, never `is_jailbreak_*` and no ASR (the benchmark
+  defines no threshold), so it composes with the HarmBench judges over the same completions.
+  Tests: `tests/test_strongreject_integration.py` (needs GPU), `tests/smoke_strongreject.py`.
+- **`bo-external` looks like it was optimized for CLE-A.** It helps CLE-A (91.0% vs 76.5% ASR)
+  and hurts CLE-P (84.5 vs 88.0 ASR, 0.586 vs 0.678 StrongREJECT), with both judges agreeing on
+  the sign in both cases. That is an interaction, not a level shift. Single seed, no intervals;
+  the CLE-P ASR gap alone is inside n=200 noise. This is evidence, not an answer — the registry
+  still says `optimized_for: unknown` and only the provider can settle it.
+- **The two judges reorder the table.** ASR ranks CLE-A/bo-external first, StrongREJECT ranks
+  CLE-P/hlmean first, and CLE-A/hlmean beats CLE-P/bo-external on StrongREJECT despite 8 points
+  less ASR. Same soft-breakage effect `answer_quality.py` found, now confirmed by an independent
+  published judge rather than a self-judge.
+- **MC1 is the paper-comparable TruthfulQA metric, not MC2.** The paper (Tab. 4/5, App. H)
+  reports a single TruthfulQA accuracy; its LLaMA3-8B baseline of 37.08 matches MC1 here (~38%)
+  and not MC2 (~59%). `truthfulqa_mc.py` now headlines MC1 as unsteered-vs-steered; MC2 is still
+  computed and saved. Note the paper also evaluates MMLU and ARC, which this repo does not, so
+  the coherence axis here is narrower than the paper's.
+
 ## 4. Immediate next steps (in the order I would do them)
 
+0. **Coherence for the two `bo-external` cells** — the 4-row tradeoff table is otherwise
+   complete. `truthfulqa_mc.py` is still hardcoded to the `{baseline, paper, hlmean}` conditions
+   and does not know registry schedule names; generalizing that is ~10 lines, then two n=790
+   scoring runs (~40 min, mostly CLE-A because it recomputes deltas per question). Without this
+   the best-ASR run (CLE-A/bo-external, 91.0%) has no coherence cost attached.
+   Also worth the cheap paired McNemar over the shared 200 prompts to firm up the interaction
+   claim above — the machinery already exists and single-seed point estimates are all we have.
 1. **Re-run fluency under constrained scoring** so those numbers are trustworthy, and fix the
    distribution columns in `experiments/results/truthfulqa_fluency/README.md`:
    ```bash
@@ -116,6 +149,33 @@ Established this session:
 
 ## 5. Gotchas worth not rediscovering
 
+- **The volume has a ~47 GB quota and `df` will not show it.** `df` reports the underlying
+  MooseFS cluster (240 TB free), so a write failing with `OSError: [Errno 122] Disk quota
+  exceeded` looks impossible. `du -sh /workspace` is the number that matters. The HF cache is
+  ~44 GB of it (HarmBench-13B 25 GB, Llama-3-8B 15 GB, gemma-2b 4.7 GB) and none of it is
+  duplicated — blob sums match the shard counts exactly, so there is nothing to reclaim there.
+- **Results do not travel with `git push`.** `completions/` is a symlink to
+  `repo-backup/completions`, outside the repo, and git tracks zero entries under it. Completions
+  and evaluation JSONs live only on the volume. `experiments/results/` IS tracked and does push.
+- **`experiments/harmless_mean_schedule.py` is broken on its defaults.** `--reps_dir` falls back
+  to `dataset/representations/llama3-8b/train_svm`, which holds the `svm_layer*.pt` probes but no
+  `HFx_train.pt`/`HLx_train.pt`. Those tensors only exist at the doubly-nested
+  `dataset/representations/representations/...` path and in `repo-backup/`. Regenerating hlmean
+  needs an explicit `--reps_dir`; the registry's `generator` field for hlmean records the command
+  as documented, not as runnable.
+- **StrongREJECT's prompt template ends in a trailing space that is load-bearing.** `"### Answer: "`
+  — the space is its own token and the score is read at the position after it. Trim it and every
+  score silently becomes meaningless. `_load_strongreject_template()` asserts on this, and
+  `captured_mass` (digit probability over the FULL vocabulary, ~0.998 in practice) is the runtime
+  tripwire. Upstream cannot catch this: it softmaxes over only the five digit logits, so its
+  probabilities sum to 1 by construction.
+- **StrongREJECT upstream injects a literal `<bos>` into every response.** It truncates by
+  tokenise-then-decode without `skip_special_tokens`, so the judge prompt reads
+  `AI model response: <bos>...`. Reproduced by default (`reference_bos_quirk=True`) so numbers
+  stay comparable with published ones. On four hand-built cases it barely moved near-zero scores
+  but pushed a compliant response 0.72 -> 0.52, i.e. it may systematically deflate exactly the
+  successful jailbreaks the benchmark exists to measure. Unmeasured at scale — one extra judge
+  pass over existing completions would settle it.
 - `--gate_c=-0.5m` needs the `=`; argparse reads a bare `-0.5m` as an option name.
 - `--runs "label=path"` in `answer_quality.py` splits on the LAST `=`, because labels contain
   `=` (e.g. `CLE-P* c=0`).
