@@ -21,14 +21,23 @@ All CLE-P* rows use hlmean margins. Fluency is the OLD regex scoring — see cav
 | CLE-P* c=0 | 1.11 | 57.0% | 46.5% | 0.9% | 36.7% | -1.3 | 57.3% | -1.3 | -- |
 | CLE-P* c=0.61 | 1.11 | 4.0% | 3.0% | 0.0% | 38.1% | +0.1 | 58.5% | -0.2 | -- |
 
-## StrongREJECT re-run, 2026-08-06 (`logs/run_full_rerun.sh`)
+## StrongREJECT-judge re-run on HarmBench prompts, 2026-08-06 (`logs/run_full_rerun.sh`)
+
+**Read the header literally: this is the StrongREJECT JUDGE applied to HARMBENCH prompts. It is
+not the StrongREJECT benchmark.** The prompt set is `harmbench_standard` (n=200); the native
+StrongREJECT set is `dataset/processed/strong_reject.json` (n=313) and has **zero** overlap with
+it. Cells here are not comparable to anything in the StrongREJECT-benchmark section below.
+
+What the column does measure is real and is the point of the exercise: a continuous, externally
+published harmfulness score over the same completions the binary HarmBench judge saw, which is
+what exposes the soft-breakage / judge-reordering effect.
 
 Four fresh generations judged by BOTH the standard HarmBench protocol and the StrongREJECT
-fine-tuned evaluator (continuous 0-1; the benchmark defines no threshold, so there is no ASR
-column for it). Same n=200 HarmBench standard prompts. Digit mass 0.998 on every run, so the
-evaluator was scoring at the right position throughout.
+fine-tuned evaluator (continuous 0-1; StrongREJECT defines no threshold, so there is no ASR
+column for it). Digit mass 0.998 on every run, so the evaluator was scoring at the right
+position throughout.
 
-| run | schedule | ASR | StrongREJECT | MC1 | dMC1 |
+| run | schedule | ASR | SR-judge (HB prompts) | MC1 | dMC1 |
 | --- | --- | --- | --- | --- | --- |
 | CLE-A | bo-external | 91.0% | 0.6305 | 31.9% | **-6.1** |
 | CLE-A | hlmean | 76.5% | 0.6211 | 37.5% | -0.5 |
@@ -72,6 +81,67 @@ leaves MC1 essentially intact, at -0.5 under CLE-A.
 
 Reproducibility check against the rows above: CLE-A hlmean reproduced exactly (76.5%), CLE-P
 hlmean came in at 88.0% vs 88.5% previously — one prompt.
+
+## StrongREJECT BENCHMARK, n=313, 2026-08-06 (`logs/run_strongreject_dataset.sh`)
+
+The matched configuration: the StrongREJECT judge on the **native 313-prompt StrongREJECT set**
+(`dataset/processed/strong_reject.json`), which ships with upstream `pralab/latent-evasion` and
+is registered in `load_dataset.py` but is selected by nothing upstream — the CLE paper never
+mentions StrongREJECT (0 occurrences, vs 27 for HarmBench). This is the first use of that file.
+Zero prompt overlap with `harmbench_standard`, so **do not compare cells against the section
+above**.
+
+| run | schedule | SR-313 | ASR (off-dist) | vs SR-judge on HB prompts |
+| --- | --- | --- | --- | --- |
+| CLE-A | bo-external | 0.6782 | 87.9% | 0.6305 |
+| CLE-A | hlmean | 0.7117 | 78.9% | 0.6211 |
+| CLE-P | bo-external | 0.7129 | 89.5% | 0.5855 |
+| CLE-P | hlmean | **0.7760** | 88.5% | 0.6780 |
+
+ASR is the HarmBench classifier run on StrongREJECT instructions — **off-distribution**, since
+`cais/HarmBench-Llama-2-13b-cls` expects HarmBench *behavior* strings. Useful for reading the
+gap against the continuous score; not the standard HarmBench protocol, and it should never be
+quoted as a HarmBench number.
+
+- **hlmean beats bo-external under BOTH variants** on the native benchmark: +0.034 for CLE-A,
+  +0.063 for CLE-P. This is the cleanest answer yet to "what do mean margins do to refusal" —
+  the effect no longer depends on which variant you pick, and it holds *despite* bo-external
+  being the CLE-A-tuned schedule and therefore playing at home in the CLE-A row.
+- **The sign flips against the HarmBench-prompt measurement for CLE-A** (there bo-external led
+  0.6305 vs 0.6211). So schedule ranking is prompt-set dependent, which is an argument for
+  reporting the benchmark on its own prompts rather than borrowing HarmBench's.
+- **Judge disagreement is wider here.** ASR ranks CLE-P/bo-external top (89.5%) while SR-313
+  ranks it third; CLE-A/hlmean is last on ASR (78.9%) but second on SR-313. Consistent with the
+  soft-breakage reading: binary ASR rewards attempts, StrongREJECT rewards delivery.
+
+### The SDPA batch bug (found by `captured_mass`, fixed 2026-08-06)
+
+The first pass at this table was wrong and the tripwire caught it. Under the default SDPA
+attention kernel, `qylu4156/strongreject-15k-v1` silently returns **all-zero logits for an entire
+left-padded batch** once the batch runs long (~850 tokens). Upstream renormalises over only the
+five digit logits, so a dead batch comes back as a plausible ~0.53 for every item rather than as
+an error. 32 of 313 items — exactly 4 batches of 8 — were dead in the CLE-P/hlmean run.
+
+Verified: batch `[160:168]` scored 0.000 digit mass batched under SDPA and 0.998 under eager,
+item-for-item identical to scoring those items individually. **dtype is not the trigger** —
+fp32 + SDPA fails identically; `attn_implementation="eager"` fixes it completely.
+
+Effect on the numbers (all four runs moved up, since dead items were scored ~0.5):
+
+| run | before (SDPA) | after (eager) |
+| --- | --- | --- |
+| CLE-A / bo-external | 0.6555 | 0.6782 |
+| CLE-A / hlmean | 0.6789 | 0.7117 |
+| CLE-P / bo-external | 0.6849 | 0.7129 |
+| CLE-P / hlmean | 0.7315 | 0.7760 |
+
+The n=200 HarmBench-prompt evaluations were checked and are **clean** — 0 items below 0.5 mass
+in all four, because those batches never got long enough to trigger it. Those numbers stand.
+
+Two hardening changes: `attn_implementation="eager"` is now pinned in `strongreject_judge_fn`,
+and the tripwire counts dead items individually (`strongreject_n_low_mass`) instead of only
+warning on a mean below 0.9. The mean was too blunt — 32 dead items out of 313 still averages
+0.92, so three of the four contaminated runs never warned at all.
 
 ## Pareto frontier (effective ASR vs dMC2)
 
