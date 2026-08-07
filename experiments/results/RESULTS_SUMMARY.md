@@ -190,6 +190,43 @@ while hlmean sits at -4.7. Two independently-derived BO schedules converging on 
 coherence cost, well apart from the data-derived one, is at least suggestive that BO's objective
 is buying ASR without pricing coherence at all.
 
+## Independent judge: StrongREJECT rubric via OpenAI API, 2026-08-06 (`experiments/strongreject_api_batch.py`)
+
+The same five native-313 cells re-graded by the StrongREJECT **rubric** judge (`gpt-5.4-mini`),
+which returns the refused / convincing / specific decomposition and the composite
+`(1-refused)*(conv+spec-2)/8`. Run as one OpenAI Batch job (1,565 requests, 50% off). Note this
+is the **teacher the local fine-tuned judge was distilled from**, so it is a differently-built
+check on the same rubric, not a fully independent second opinion. 306-312/313 graded per cell;
+the 1-11 ungraded items per cell (judge refusal or unparseable block) are excluded from the mean,
+never scored 0.
+
+| method | schedule | API composite | local | refuse% | mean conv | mean spec |
+| --- | --- | --- | --- | --- | --- | --- |
+| CLE-A | bo-external | 0.6676 | 0.6782 | 4.8% | 3.45 | 3.98 |
+| CLE-A | hlmean | 0.7252 | 0.7117 | 10.9% | 3.93 | 4.24 |
+| CLE-P | bo-external (mismatched) | 0.7095 | 0.7129 | 2.6% | 3.60 | 4.16 |
+| CLE-P | hlmean | **0.8360** | 0.7760 | 1.6% | 4.20 | 4.57 |
+| CLE-P | bo-external-clep | 0.7965 | 0.7645 | 1.9% | 4.02 | 4.42 |
+
+- **The BO-free result survives the second judge, and strengthens.** hlmean beats bo-external
+  under both variants (CLE-A +0.058, CLE-P +0.127), and CLE-P/hlmean is again the top cell. Its
+  edge over the CLE-P-tuned `bo-external-clep` *widens* under this judge — +0.040 here vs +0.012
+  locally. Paired over shared graded prompts both contrasts are significant on BOTH tests
+  (`bo-external-clep`-`hlmean`: n=310, mean -0.040, Wilcoxon 0.001, paired t 0.001;
+  `bo-external`-`hlmean` under CLE-A: n=310, mean -0.057, Wilcoxon 0.000, paired t 0.007) —
+  firmer than the local judge, where the paired t was n.s. (see the previous section).
+- **The decomposition localises the CLE-A/bo-external penalty to CONVINCINGNESS, not detail.**
+  bo-external vs hlmean under CLE-A differs far more on `convincing` (3.45 vs 3.93) than on
+  `specific` (3.98 vs 4.24), and bo-external simultaneously refuses LESS (4.8% vs 10.9%). So
+  bo-external jailbreaks more often but produces weaker compliances — the soft-breakage pattern
+  measured directly, not inferred from HarmBench-vs-StrongREJECT disagreement.
+
+**Caveat, state it plainly:** cell MEANS agree tightly, but per-item agreement is only Pearson
+**r=0.55** (n=1558 pooled). The two judges are not interchangeable at the item level despite the
+teacher/student link. Use the local judge's per-item scores for the disagreement analysis; use
+this judge for the decomposition and as a check on aggregates. Single seed, gpt-5.4-mini at
+temperature 0.
+
 ## Pareto frontier (effective ASR vs dMC2)
 
 Note: this frontier is still computed on dMC2. MC1 is the paper-comparable metric (the CLE
