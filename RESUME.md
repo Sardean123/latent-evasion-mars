@@ -34,8 +34,11 @@ the plot scripts:
 ```bash
 pip install --no-cache-dir transformers==4.57.6 tokenizers==0.22.2 accelerate==1.2.0 \
   peft==0.18.1 safetensors==0.7.0 sentencepiece==0.2.1 scikit-learn==1.8.0 \
-  huggingface_hub==0.36.2 datasets==4.8.4 tqdm matplotlib
+  huggingface_hub==0.36.2 datasets==4.8.4 tqdm matplotlib openai scipy
 ```
+
+`openai` is needed only for the `strongreject_api` rubric judge (`utils/eval_jailbreaks.py`,
+`experiments/strongreject_api_batch.py`); `scipy` for the paired significance tests.
 
 Environment variables the runs rely on (confirm they survive the restart; re-export if not):
 
@@ -43,6 +46,11 @@ Environment variables the runs rely on (confirm they survive the restart; re-exp
 export HF_HOME=/workspace/.cache/huggingface/     # model cache lives on the volume
 export HF_HUB_ENABLE_HF_TRANSFER=1
 ```
+
+The OpenAI API judge reads `OPENAI_API_KEY` from the repo-root `.env` (gitignored, loaded by
+`_load_dotenv()`). That file lives on the volume, so it survives a pod stop — but it is NOT in
+git, so if the new pod does not re-attach this exact network volume it is gone and must be
+re-added: `echo 'OPENAI_API_KEY=sk-...' >> /workspace/lem-durable/repo/.env`.
 
 Models already cached on the volume (~40 GB, no re-download needed): `meta-llama/Meta-Llama-3-8B-Instruct`,
 `cais/HarmBench-Llama-2-13b-cls`. `HF_TOKEN` is NOT set and is not needed while the cache is warm.
