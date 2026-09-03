@@ -112,7 +112,10 @@ def main():
     ap.add_argument("--dataset", default="harmbench_test")
     ap.add_argument("--limit", type=int, default=64)
     ap.add_argument("--refusal_phrase", default="I cannot")
-    ap.add_argument("--affirmative", default="Sure")
+    ap.add_argument("--compliance_phrase", default="Sure!",
+                    help="Phrase for the log-odds target grad[logP(refusal)-logP(compliance)].")
+    ap.add_argument("--affirmative", default="Sure",
+                    help="First token of this is the compliance token for the logit-diff target D.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None)
     ap.add_argument("--save_per_prompt", action="store_true")
@@ -190,14 +193,31 @@ def main():
 
     prompts, cats = load_prompts(args)
     refuse_ids = model.tokenizer.encode(args.refusal_phrase, add_special_tokens=False)
+    comply_ids = model.tokenizer.encode(args.compliance_phrase, add_special_tokens=False)
     comply_id = model.tokenizer.encode(args.affirmative, add_special_tokens=False)[0]
     refuse0 = refuse_ids[0]
-    print(f"refusal token ids {refuse_ids} (first={refuse0}) | affirmative id {comply_id}\n")
+    print(f"refusal {args.refusal_phrase!r}->{refuse_ids} | compliance "
+          f"{args.compliance_phrase!r}->{comply_ids} | logit-diff affirmative id {comply_id}\n")
 
-    # accumulators: per layer, lists of cosines over prompts
-    acc = {l: {k: [] for k in ["gR_w", "gD_w", "gR_dm", "gD_dm", "gR_gD"]} for l in selected}
-    consensus = {l: {"gR": torch.zeros(D), "gD": torch.zeros(D)} for l in selected}
-    tvals = {"logp_refusal": [], "logit_diff": []}
+    def phrase_grad(pid, phrase_ids, pos):
+        """log P(phrase) teacher-forced after the prompt, and its grad w.r.t. h_l[pos] per layer.
+        h_l[pos] is identical across phrases (causal attention: pos attends only to <=pos, and the
+        prompt is shared), so grad[logP(refuse)-logP(comply)] = grad_refuse - grad_comply."""
+        ids2 = torch.cat([pid, torch.tensor([phrase_ids], device=device)], dim=1)
+        store = {}
+        hh = [enable_activation_grad(model)] + capture_hooks(layers, selected, store)
+        try:
+            t = target_logp_refusal(model, ids2, torch.ones_like(ids2), pos, phrase_ids, store)
+            g = grad_at(t, store, selected, pos)
+        finally:
+            remove_hooks(hh)
+        return t.item(), g
+
+    # accumulators: per layer, lists of cosines over prompts.  gRD = log-odds gradient.
+    keys = ["gR_w", "gD_w", "gRD_w", "gR_dm", "gD_dm", "gRD_dm", "gR_gD", "gR_gRD"]
+    acc = {l: {k: [] for k in keys} for l in selected}
+    consensus = {l: {"gR": torch.zeros(D), "gD": torch.zeros(D), "gRD": torch.zeros(D)} for l in selected}
+    tvals = {"logp_refusal": [], "logp_compliance": [], "log_odds": [], "logit_diff": []}
     per_prompt = []
 
     for i, prompt in enumerate(prompts):
@@ -205,7 +225,7 @@ def main():
         pid = inputs.input_ids
         pos = pid.shape[1] - 1  # last prompt token: predicts the first assistant token
 
-        # ---- Target D: logit difference (prompt only) ----
+        # ---- Target D: first-token logit difference (prompt only) ----
         store = {}
         h = [enable_activation_grad(model)] + capture_hooks(layers, selected, store)
         try:
@@ -215,36 +235,35 @@ def main():
             remove_hooks(h)
         tvals["logit_diff"].append(tD.item())
 
-        # ---- Target R: log P(refusal phrase) (prompt + appended refusal tokens) ----
-        rt = torch.tensor([refuse_ids], device=device)
-        ids2 = torch.cat([pid, rt], dim=1)
-        attn2 = torch.ones_like(ids2)
-        store = {}
-        h = [enable_activation_grad(model)] + capture_hooks(layers, selected, store)
-        try:
-            tR = target_logp_refusal(model, ids2, attn2, pos, refuse_ids, store)
-            gR = grad_at(tR, store, selected, pos)
-        finally:
-            remove_hooks(h)
-        tvals["logp_refusal"].append(tR.item())
+        # ---- Target R: log P(refusal phrase);  Target C: log P(compliance phrase) ----
+        tR, gR = phrase_grad(pid, refuse_ids, pos)
+        tC, gC = phrase_grad(pid, comply_ids, pos)
+        tvals["logp_refusal"].append(tR)
+        tvals["logp_compliance"].append(tC)
+        tvals["log_odds"].append(tR - tC)
 
         for l in selected:
             gRl = unit(gR[l].to(device))
             gDl = unit(gD[l].to(device))
+            gRDl = unit((gR[l] - gC[l]).to(device))  # log-odds gradient direction
             acc[l]["gR_w"].append(torch.dot(gRl, w[l]).item())
             acc[l]["gD_w"].append(torch.dot(gDl, w[l]).item())
+            acc[l]["gRD_w"].append(torch.dot(gRDl, w[l]).item())
             acc[l]["gR_gD"].append(torch.dot(gRl, gDl).item())
+            acc[l]["gR_gRD"].append(torch.dot(gRl, gRDl).item())
             if dmean:
                 acc[l]["gR_dm"].append(torch.dot(gRl, dmean[l]).item())
                 acc[l]["gD_dm"].append(torch.dot(gDl, dmean[l]).item())
+                acc[l]["gRD_dm"].append(torch.dot(gRDl, dmean[l]).item())
             consensus[l]["gR"] += gRl.cpu()
             consensus[l]["gD"] += gDl.cpu()
+            consensus[l]["gRD"] += gRDl.cpu()
 
         if args.save_per_prompt:
             per_prompt.append({"prompt": prompt, "category": cats[i],
-                               "logit_diff": tD.item(), "logp_refusal": tR.item(),
+                               "logp_refusal": tR, "logp_compliance": tC, "log_odds": tR - tC,
                                "gR_w": {l: acc[l]["gR_w"][-1] for l in selected},
-                               "gD_w": {l: acc[l]["gD_w"][-1] for l in selected}})
+                               "gRD_w": {l: acc[l]["gRD_w"][-1] for l in selected}})
         if (i + 1) % 16 == 0:
             print(f"  {i+1}/{len(prompts)} prompts")
         torch.cuda.empty_cache()
@@ -258,7 +277,7 @@ def main():
 
     summary = {"config": {k: getattr(args, k) for k in
                           ["model_name", "svm_dir", "reps_dir", "layers", "dataset", "limit",
-                           "refusal_phrase", "affirmative", "seed"]},
+                           "refusal_phrase", "compliance_phrase", "affirmative", "seed"]},
                "hidden_dim": D, "random_baseline_abs_cos": rand_baseline,
                "n_prompts": len(prompts),
                "target_means": {k: float(np.mean(v)) for k, v in tvals.items()},
@@ -267,11 +286,14 @@ def main():
         row = {k: stats(acc[l][k]) for k in acc[l]}
         cons_gR = unit(consensus[l]["gR"].to(device))
         cons_gD = unit(consensus[l]["gD"].to(device))
+        cons_gRD = unit(consensus[l]["gRD"].to(device))
         row["consensus_gR_w"] = float(torch.dot(cons_gR, w[l]).item())
         row["consensus_gD_w"] = float(torch.dot(cons_gD, w[l]).item())
+        row["consensus_gRD_w"] = float(torch.dot(cons_gRD, w[l]).item())
         if dmean:
             row["w_dmean"] = float(torch.dot(w[l], dmean[l]).item())
             row["consensus_gR_dmean"] = float(torch.dot(cons_gR, dmean[l]).item())
+            row["consensus_gRD_dmean"] = float(torch.dot(cons_gRD, dmean[l]).item())
         summary["per_layer"][str(l)] = row
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
@@ -282,18 +304,20 @@ def main():
         print(f"Wrote per-prompt -> {pp}")
 
     # ---- console table ----
-    print(f"\n{'layer':>5} {'gR·w':>16} {'gD·w':>16} {'gR·gD':>10} " +
-          (f"{'gR·dm':>10} {'w·dm':>8}" if dmean else ""))
+    print(f"\n{'layer':>5} {'gR·w  (logP ref)':>18} {'gRD·w (log-odds)':>18} "
+          f"{'gD·w (logit)':>14} " + (f"{'w·dm':>8}" if dmean else ""))
     for l in selected:
         r = summary["per_layer"][str(l)]
         def m(k): return f"{r[k]['mean']:+.3f}±{r[k]['std']:.3f}" if r[k] else "  --  "
-        line = f"{l:>5} {m('gR_w'):>16} {m('gD_w'):>16} {r['gR_gD']['mean']:>+10.3f} "
+        line = f"{l:>5} {m('gR_w'):>18} {m('gRD_w'):>18} {m('gD_w'):>14} "
         if dmean:
-            line += f"{r['gR_dm']['mean']:>+10.3f} {r['w_dmean']:>+8.3f}"
+            line += f"{r['w_dmean']:>+8.3f}"
         print(line)
     print(f"\nrandom-baseline |cos| ~ {rand_baseline:.4f}  (a null cosine is indistinguishable from this)")
-    print(f"target means: log P(refusal)={summary['target_means']['logp_refusal']:.3f}  "
-          f"logit_diff(refuse-affirm)={summary['target_means']['logit_diff']:.3f}")
+    tm = summary["target_means"]
+    print(f"target means: log P(refusal)={tm['logp_refusal']:.3f}  "
+          f"log P(compliance)={tm['logp_compliance']:.3f}  "
+          f"log-odds(ref-comp)={tm['log_odds']:.3f}  logit_diff={tm['logit_diff']:.3f}")
     print(f"\nWrote {args.out}")
 
 
