@@ -135,6 +135,32 @@ Established 2026-08-06:
   computed and saved. Note the paper also evaluates MMLU and ARC, which this repo does not, so
   the coherence axis here is narrower than the paper's.
 
+Established 2026-09-03:
+
+- **Cross-judge disagreement, prompts held constant** (`experiments/cross_judge_disagreement.py`,
+  results in `experiments/results/judge_disagreement/`). Both prompt sets scored by their native
+  AND foreign judge over the same completions. Agreement is only fair-to-moderate (Cohen kappa
+  0.32-0.45). Two mechanisms on different harm types: HarmBench OVER-counts broken attack code
+  (`cybercrime_intrusion`, Quadrant A), the StrongREJECT rubric OVER-counts fluent prose and
+  UNDER-credits broken code (Quadrant B, prose-heavy, dominates the 313). `.txt` views:
+  `dump_txt_views.py` -> `model_outputs/strongreject_*.txt` (gitignored) and
+  `judge_disagreement/judge_disagreement.txt`.
+- **Refusal-gradient vs probe-direction alignment** (`experiments/refusal_gradient_alignment.py`,
+  `refusal_gradient_walkthrough.py`, `plot_refusal_alignment.py`; results in
+  `experiments/results/refusal_gradient/`). The probe weight `w` CLE steers along tracks
+  difference-in-means (~0.85) but is near-ORTHOGONAL to the gradient of log P(refusal) w.r.t. the
+  block-l residual stream at the last prompt token (cos ~0.01-0.03, n=159 harmful). Gradient taken
+  w.r.t. a non-leaf activation; the loaded model is frozen so a forward builds no graph -- an
+  input-embedding grad-enable hook fixes it without unfreezing weights. A finite-difference check
+  shows moving along `-w` (CLE's jailbreak direction) drops refusal ~15-40x less per unit step than
+  moving along `-grad`; CLE compensates with large BO margins x 7 layers x every decode token. The
+  margin->step conversion: step = (raw_score + m)/||w|| (Euclidean move distance). Harmful vs
+  harmless (log-odds target grad[logP("I cannot") - logP("Sure, here")]): the refusal-inducing
+  direction aligns with the harm axis on HARMLESS prompts (+0.06..+0.11) but not on harmful
+  (saturated regime, ~0 to -0.10) -- w is the refusal lever near the boundary, not once harm is
+  detected. Section in RESULTS_SUMMARY.md ("Cross-judge disagreement"); the refusal-gradient
+  section is not yet written into RESULTS_SUMMARY.
+
 ## 4. Immediate next steps (in the order I would do them)
 
 0. **Paired McNemar over the shared 200 prompts** for the bo-external-vs-hlmean contrasts, to
