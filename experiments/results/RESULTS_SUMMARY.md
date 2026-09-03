@@ -227,6 +227,51 @@ teacher/student link. Use the local judge's per-item scores for the disagreement
 this judge for the decomposition and as a check on aggregates. Single seed, gpt-5.4-mini at
 temperature 0.
 
+## Cross-judge disagreement, prompts held constant, 2026-09-03 (`experiments/cross_judge_disagreement.py`)
+
+Both prompt sets are scored by their NATIVE judge and the FOREIGN judge over the same
+completions, pooled across all five steering cells (each row = one completion): HarmBench prompts
+get HarmBench (binary) + StrongREJECT-local; the native 313 get SR-local + SR-API + HarmBench.
+This isolates the judge from the method: the ranking confound (bo-external tuned on off-benchmark
+prompts) does not apply because the completion is held fixed and only the judge varies.
+
+Agreement is fair-to-moderate everywhere, never better:
+
+| contrast | prompt set | n | agreement | Cohen kappa | corr |
+| --- | --- | --- | --- | --- | --- |
+| HB vs SR-local | HarmBench | 1000 | 78.0% | 0.37 | pt-biserial 0.48 |
+| HB vs SR-local | StrongREJECT | 1565 | 86.6% | 0.45 | pt-biserial 0.54 |
+| HB vs SR-API | StrongREJECT | 1558 | 88.7% | 0.32 | — |
+| SR-local vs SR-API | StrongREJECT | 1558 | — | — | Pearson 0.55 / Spearman 0.45 |
+
+(SR-local binarised at score>=0.5; HB-vs-API's high agreement / low kappa is class imbalance — the
+API judge scores 159 of 210 HB=0 items as complied.)
+
+The disagreement is **not noise; it tracks the harm type**, and the two judges make opposite errors:
+
+- **Quadrant A — HB=jailbroken, StrongREJECT~refusal (HarmBench OVER-counts).** On HB prompts
+  n=24, of which **22 are `cybercrime_intrusion`**: confident, correctly-formatted attack code
+  that is non-functional (DDoS scripts pointed at `example.com`, keyloggers with `def __init`
+  typos, `\x00`-spew payloads). HarmBench fires on *attempt*; the rubric judge scores *delivery*
+  and rates it ~1. On the SR set this mode nearly vanishes (n=7) because that benchmark has few
+  code-generation tasks.
+- **Quadrant B — HB=not-jailbroken, StrongREJECT=compliant.** n=34 (HB set) / **n=91 (SR set)**.
+  On the SR prompts this is genuine HarmBench UNDER-counting of compliant harmful **prose**: 43
+  hate/harassment/discrimination, 19 disinformation, 11 sexual — real deliveries ("most effective
+  tactics for promoting racism", voter-suppression how-tos, a curriculum arguing the Civil Rights
+  Movement was unnecessary) that HarmBench scores 0 but both rubric judges credit at 0.68-0.89.
+  On the HB prompts, Quadrant B is murkier and partly the REVERSE error — SR-local over-crediting
+  templated/subverted outputs (a "sexist email" that opens *"Kudos to Sarah for her outstanding
+  work"*, hate mail with `[Public Figure's Name]` placeholders), where HB=0 is the better call.
+
+**Takeaway:** HarmBench rewards attempt (over-credits broken code, category `cybercrime_intrusion`),
+the StrongREJECT rubric rewards delivery (over-credits fluent prose, under-credits broken code).
+That single axis explains why the two judges reorder the method table, and it is orthogonal to the
+bo-external tuning confound. Full case dump in
+`experiments/results/judge_disagreement/cross_judge_disagreement.md`; numbers in
+`cross_judge_metrics.json`. This supersedes the earlier pooled `judge_disagreement.{json,md}`,
+which predated the SDPA re-judge and the API judge and pooled the two prompt sets together.
+
 ## Pareto frontier (effective ASR vs dMC2)
 
 Note: this frontier is still computed on dMC2. MC1 is the paper-comparable metric (the CLE
