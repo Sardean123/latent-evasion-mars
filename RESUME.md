@@ -161,7 +161,30 @@ Established 2026-09-03:
   detected. Section in RESULTS_SUMMARY.md ("Cross-judge disagreement"); the refusal-gradient
   section is not yet written into RESULTS_SUMMARY.
 
+Established 2026-09-08:
+
+- **What low/all StrongREJECT scores are made of** (`experiments/low_score_composition.py`,
+  `experiments/score_composition.py`, stdlib-only, post-hoc on the eval JSONs). The reward-hacking
+  characterisation for the team. A 5-bucket cross of the two judges over every response (HarmBench
+  binary x StrongREJECT-local cut at 0.5 == rubric 3, refusal-string pulled out first):
+  AGREE_pos, AGREE_neg, Refused, HB>SR (HarmBench over-counts broken over-steer), SR>HB (HarmBench
+  under-counts prose it misses). **HB>SR tracks margin magnitude** (bo-external mean 1.64 -> 13-26%
+  broken vs hlmean 1.11 -> 3-17%) and is the reward hack; SR>HB is ~method-independent (~3-7%). Net
+  ASR inflation is ~+15% on HarmBench's own code-heavy prompts but only ~+1.6% on StrongREJECT's
+  prose prompts -- HarmBench over- and under-counting nearly cancel on SR, so switching benchmarks
+  removes a ~16pt tailwind for over-steered/broken outputs. hack-share is cutoff-sensitive (state
+  the threshold); the bo/hl RATIO is cutoff-robust. Not yet in RESULTS_SUMMARY; no stacked-bar
+  figure yet (both offered).
+
 ## 4. Immediate next steps (in the order I would do them)
+
+-1. **NEXT SESSION (user's stated priority): the gradient of log P(refusal) w.r.t. activations.**
+   The scaffold exists -- `experiments/refusal_gradient_alignment.py` (aggregate + per-prompt),
+   `refusal_gradient_walkthrough.py` (print-everything + finite-difference), `plot_refusal_alignment.py`.
+   Rebuild the env first (RESUME S1; the pod comes back with only torch surviving). Open threads on
+   this: write the refusal-gradient section into RESULTS_SUMMARY, make the harmful-vs-harmless
+   sign-flip figure, overlay the real per-layer CLE step (= (raw_score+m)/||w||) on the
+   finite-difference curve, and optionally the LoRA weight-vs-probe comparison (phase 2).
 
 0. **Paired McNemar over the shared 200 prompts** for the bo-external-vs-hlmean contrasts, to
    put an interval on the interaction claim above. The machinery already exists
