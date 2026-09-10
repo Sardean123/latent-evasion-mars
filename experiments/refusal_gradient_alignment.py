@@ -216,7 +216,10 @@ def main():
     # accumulators: per layer, lists of cosines over prompts.  gRD = log-odds gradient.
     keys = ["gR_w", "gD_w", "gRD_w", "gR_dm", "gD_dm", "gRD_dm", "gR_gD", "gR_gRD"]
     acc = {l: {k: [] for k in keys} for l in selected}
-    consensus = {l: {"gR": torch.zeros(D), "gD": torch.zeros(D), "gRD": torch.zeros(D)} for l in selected}
+    # consensus accumulators: sums of UNIT gradient directions (for cos of the mean direction) and
+    # of RAW gradients (magnitude-weighted), per layer. Saved so runs can be POOLED across datasets.
+    consensus = {l: {"gR": torch.zeros(D), "gD": torch.zeros(D), "gRD": torch.zeros(D),
+                     "gR_raw": torch.zeros(D), "gRD_raw": torch.zeros(D)} for l in selected}
     tvals = {"logp_refusal": [], "logp_compliance": [], "log_odds": [], "logit_diff": []}
     per_prompt = []
 
@@ -258,6 +261,8 @@ def main():
             consensus[l]["gR"] += gRl.cpu()
             consensus[l]["gD"] += gDl.cpu()
             consensus[l]["gRD"] += gRDl.cpu()
+            consensus[l]["gR_raw"] += gR[l].cpu()
+            consensus[l]["gRD_raw"] += (gR[l] - gC[l]).cpu()
 
         if args.save_per_prompt:
             per_prompt.append({"prompt": prompt, "category": cats[i],
@@ -298,6 +303,16 @@ def main():
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(summary, open(args.out, "w"), indent=2)
+    # summed gradient vectors per layer, so runs can be POOLED across datasets for cos(mean grad, w)
+    npz = args.out.replace(".json", ".consensus.npz")
+    np.savez(npz, layers=np.array(selected), n_prompts=len(prompts),
+             gR_unit_sum=np.stack([consensus[l]["gR"].numpy() for l in selected]),
+             gRD_unit_sum=np.stack([consensus[l]["gRD"].numpy() for l in selected]),
+             gR_raw_sum=np.stack([consensus[l]["gR_raw"].numpy() for l in selected]),
+             gRD_raw_sum=np.stack([consensus[l]["gRD_raw"].numpy() for l in selected]),
+             w=np.stack([w[l].cpu().numpy() for l in selected]),
+             dmean=np.stack([dmean[l].cpu().numpy() for l in selected]) if dmean else np.zeros(0))
+    print(f"Wrote consensus vectors -> {npz}")
     if args.save_per_prompt:
         pp = args.out.replace(".json", "_per_prompt.json")
         json.dump(per_prompt, open(pp, "w"), indent=2)
