@@ -176,6 +176,30 @@ Established 2026-09-08:
   the threshold); the bo/hl RATIO is cutoff-robust. Not yet in RESULTS_SUMMARY; no stacked-bar
   figure yet (both offered).
 
+Established 2026-09-10:
+
+- **Refusal-direction study is empirically closed: the probe is a DETECTION axis, not the control
+  axis.** `cos(grad, w) ~= 0` across single gradient (~0.03), pooled mean gradient (~0.14,
+  `pool_consensus.py` from the `.consensus.npz` vectors), a 12-step flip, and a 100-step descent
+  (`descent_step_sweep.py`: cos flat ~0.02 at 20/50/100 steps even as log-odds is driven +19 ->
+  -159; the direction DOES converge, cos(delta@20,@100)=0.51 -> cos(@50,@100)=0.86, so it is a
+  stable non-probe compliance axis). Meanwhile `cos(diff-in-means, w) = 0.85`. Refutes "the gradient
+  is too noisy, take more steps."
+- **The descent delta is a genuine jailbreak** (`refusal_activation_descent.py` = per-layer delta at
+  the last prompt token, SGD on the refuse-vs-comply logsumexp log-odds, stop at the flip; NOT Adam
+  -- Adam's sign first-step is an artifact). `descent_generate.py` shows: at the ~10-step flip
+  (||delta||~0.2) all 5 harmful prompts flip to coherent on-topic COMPLIANT text; at 40 steps
+  (||delta||~0.7) outputs degrade / revert to refusal (over-steer goes off-manifold). Harmful
+  generations dumped to `model_outputs/descent_generations.txt` (gitignored). Generation hook is
+  position-guarded (delta at prefill only). Line plot with (a) per-prompt-cos and (b) mean-gradient
+  cos: `plot_refusal_gradient_lines.py`.
+- **Judge-composition bar charts for the team** (`plot_judge_composition.py`, PNG+PDF in
+  `results/score_composition/`): 5 methods x 7 metrics, HB-ASR/SR-mean hatched.
+- Open threads (all optional): longer/full-length generations for the NON-CBRN prompts only (kept
+  parathion/KRACK to the compliance framing, not the full payload); run descent on harmless prompts;
+  characterise WHAT the stable non-probe direction is (project out w, inspect the remainder); write a
+  refusal-gradient section into RESULTS_SUMMARY.
+
 ## 4. Immediate next steps (in the order I would do them)
 
 -1. **NEXT SESSION (user's stated priority): the gradient of log P(refusal) w.r.t. activations.**
