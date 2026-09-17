@@ -48,7 +48,7 @@ echo "=========================================="
 
 echo
 echo "### Baseline (no steering) ###"
-python experiments/baseline_generate.py \
+python experiments/cle_core/baseline_generate.py \
     --model_name "$MODEL" \
     --dataset "$DATASET" \
     --limit "$LIMIT" \

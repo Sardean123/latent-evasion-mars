@@ -73,7 +73,7 @@ Full extracted paper text + PDF live on the persistent volume:
 
 ## 5. Per-layer margin experiments run this session (llama3-8b, layers 11-18)
 
-Tooling added: `experiments/steering_magnitude.py` gained `--schedules NAME=v1,v2,...`
+Tooling added: `experiments/probe_geometry/steering_magnitude.py` gained `--schedules NAME=v1,v2,...`
 and `--out_tag`, plus `m`/`dm`/`score` columns and a margin-schedule plot panel.
 `experiments/sweep_layer_margins.sh` runs mean-matched schedules through cle-a.py using
 its existing `--layer_margins` support (tags outputs `marginvec<sha1>`, writes a
@@ -128,7 +128,7 @@ Reuses `--layer_margins`, no new search code, ~30 min at n=5.
 
 ## 7. Where do steered activations actually land? (probe-score distributions)
 
-`experiments/probe_score_distributions.py`, llama3-8b, window 11-18, m=1.5, all 159
+`experiments/probe_geometry/probe_score_distributions.py`, llama3-8b, window 11-18, m=1.5, all 159
 harmbench_test prompts, last prompt token, same chat template as probe training.
 
 Question: do steered activations resemble the harmless activations the frozen probes were

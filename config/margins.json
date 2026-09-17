@@ -25,7 +25,7 @@
           "margins": [1.08, 1.08, 1.1, 1.11, 1.12, 1.14, 1.14],
           "optimized_for": null,
           "provenance": "computed from the harmless training distribution: m_l = |mean(harmless probe scores at layer l)|. No Bayesian optimization, no GPU. Method-independent by construction.",
-          "generator": "python experiments/harmless_mean_schedule.py --model_name llama3-8b --layers 11-18",
+          "generator": "python experiments/cle_core/harmless_mean_schedule.py --model_name llama3-8b --layers 11-18",
           "legacy_digest": "e7a04fe44003"
         },
         "paper-fig7b": {

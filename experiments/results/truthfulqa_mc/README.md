@@ -7,7 +7,7 @@
 `projection_hook` active during scoring, so the *steered* model is measured. MC1 = best-correct
 answer gets the highest log-prob; MC2 = normalized probability mass on all correct answers.
 Raw summed token log-probs (matches lm-eval `truthfulqa_mc`). n = 790, window layers 11–18,
-probes `train_svm`. Computed by `experiments/truthfulqa_mc.py`.
+probes `train_svm`. Computed by `experiments/coherence/truthfulqa_mc.py`.
 
 If steering makes the model incoherent, its ability to prefer true over false answers falls
 below the unsteered baseline. This is a coherence/capability-retention proxy — a separate

@@ -30,7 +30,7 @@ for DS in harmbench_standard strong_reject; do
 done
 
 echo "############ [coherence] TruthfulQA MC1 ############"
-python experiments/truthfulqa_mc.py --model_name llama3-8b --device cuda:0 \
+python experiments/coherence/truthfulqa_mc.py --model_name llama3-8b --device cuda:0 \
   --layers 11-18 --method clep --schedules "$S"
 
 echo "############ ALL DONE ############"

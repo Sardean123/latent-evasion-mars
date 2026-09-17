@@ -9,7 +9,7 @@
 #   MARGINS="1.0 3.0 6.0" LIMIT=1 bash experiments/sweep_margins.sh
 #
 # All outputs land under completions/{MODEL}/{baseline,projection,pipeline}/.
-# Use experiments/view_completions.py to eyeball them side-by-side.
+# Use experiments/cle_core/view_completions.py to eyeball them side-by-side.
 
 set -euo pipefail
 
@@ -34,7 +34,7 @@ echo "=========================================="
 
 echo
 echo "### Baseline (no steering) ###"
-python experiments/baseline_generate.py \
+python experiments/cle_core/baseline_generate.py \
     --model_name "$MODEL" \
     --dataset "$DATASET" \
     --limit "$LIMIT" \
@@ -68,4 +68,4 @@ done
 echo
 echo "Sweep complete."
 echo "View results with:"
-echo "  python experiments/view_completions.py --model_name $MODEL"
+echo "  python experiments/cle_core/view_completions.py --model_name $MODEL"

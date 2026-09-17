@@ -41,7 +41,7 @@ echo "=== CLEPSTAR JUDGE DONE ==="
 
 for C in $GATES; do
   echo "=== [mc] CLE-P* gate_c=$C ==="
-  python experiments/truthfulqa_mc.py --model_name llama3-8b --device cuda:0 \
+  python experiments/coherence/truthfulqa_mc.py --model_name llama3-8b --device cuda:0 \
     --layers 11-18 --method clepstar --gate_c "$C"
 done
 echo "=== CLEPSTAR SWEEP DONE ==="

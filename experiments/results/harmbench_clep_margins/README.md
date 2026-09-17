@@ -24,7 +24,7 @@ The BO-free harmless-mean schedule is statistically indistinguishable from the B
 schedule (one-prompt difference) while steering ~30% less (mean margin 1.11 vs 1.56).
 
 - `asr_summary.json` — overall + per-category ASR for all three runs.
-- `harmbench_asr_clep_margins.png` — bar chart (overall + per-category), from `experiments/plot_harmbench_asr.py`.
+- `harmbench_asr_clep_margins.png` — bar chart (overall + per-category), from `experiments/cle_core/plot_harmbench_asr.py`.
 - Raw completions + per-run evaluation JSONs: `completions/llama3-8b/projection/` (git-ignored; see its `RUN_MANIFEST.md`).
 
 Coherence/4-gram-repetition comparison: TODO (lighter hlmean steering is expected to degrade fluency less).

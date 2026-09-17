@@ -28,7 +28,7 @@ python utils/eval_jailbreaks.py \
 echo "=== JUDGE DONE ==="
 
 echo "=== [2/4] TruthfulQA MC under CLE-A ==="
-python experiments/truthfulqa_mc.py --model_name llama3-8b --device cuda:0 \
+python experiments/coherence/truthfulqa_mc.py --model_name llama3-8b --device cuda:0 \
   --layers 11-18 --method clea
 echo "=== MC DONE ==="
 
@@ -40,5 +40,5 @@ python cle-a.py $COMMON --margin_schedule hlmean
 echo "=== TQA GENERATION DONE ==="
 
 echo "=== [4/4] Fluency judge ==="
-python experiments/truthfulqa_fluency.py --method clea
+python experiments/coherence/truthfulqa_fluency.py --method clea
 echo "=== STAGE 2 DONE ==="

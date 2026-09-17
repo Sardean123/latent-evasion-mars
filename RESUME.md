@@ -38,7 +38,7 @@ pip install --no-cache-dir transformers==4.57.6 tokenizers==0.22.2 accelerate==1
 ```
 
 `openai` is needed only for the `strongreject_api` rubric judge (`utils/eval_jailbreaks.py`,
-`experiments/strongreject_api_batch.py`); `scipy` for the paired significance tests.
+`experiments/judges/strongreject_api_batch.py`); `scipy` for the paired significance tests.
 
 Environment variables the runs rely on (confirm they survive the restart; re-export if not):
 
@@ -74,7 +74,7 @@ python -c "import torch,transformers; from transformers.models.llama import mode
 
 The two git-excluded directories are deliberate (harmful text stays out of git) and are
 regenerable: completions from the `logs/run_*.sh` scripts, dumps from
-`experiments/compare_completions.py`. Everything numeric is committed.
+`experiments/cle_core/compare_completions.py`. Everything numeric is committed.
 
 ## 3. State of the experiments
 
@@ -97,7 +97,7 @@ Established this session:
   positions and reproduces ungated CLE-P exactly. Raising c mostly switches off DOWNSTREAM
   layers (L17 fire rate 98.8% -> 12.0% -> 1.2%), so c behaves as a soft, activation-dependent
   replacement for the paper's binary layer window lambda_l rather than as a strength knob.
-- **Soft breakage is 8-18% of nominal ASR** (`experiments/answer_quality.py`). HarmBench scores
+- **Soft breakage is 8-18% of nominal ASR** (`experiments/cle_core/answer_quality.py`). HarmBench scores
   *attempt* by its own rules; the responsiveness judge scores *delivery*. This reorders the top
   of the table (CLE-A paper 89.5% ASR -> 78.0% effective) though the top four are not
   significantly separated.
@@ -137,7 +137,7 @@ Established 2026-08-06:
 
 Established 2026-09-03:
 
-- **Cross-judge disagreement, prompts held constant** (`experiments/cross_judge_disagreement.py`,
+- **Cross-judge disagreement, prompts held constant** (`experiments/judges/cross_judge_disagreement.py`,
   results in `experiments/results/judge_disagreement/`). Both prompt sets scored by their native
   AND foreign judge over the same completions. Agreement is only fair-to-moderate (Cohen kappa
   0.32-0.45). Two mechanisms on different harm types: HarmBench OVER-counts broken attack code
@@ -145,7 +145,7 @@ Established 2026-09-03:
   UNDER-credits broken code (Quadrant B, prose-heavy, dominates the 313). `.txt` views:
   `dump_txt_views.py` -> `model_outputs/strongreject_*.txt` (gitignored) and
   `judge_disagreement/judge_disagreement.txt`.
-- **Refusal-gradient vs probe-direction alignment** (`experiments/refusal_gradient_alignment.py`,
+- **Refusal-gradient vs probe-direction alignment** (`experiments/refusal_direction/refusal_gradient_alignment.py`,
   `refusal_gradient_walkthrough.py`, `plot_refusal_alignment.py`; results in
   `experiments/results/refusal_gradient/`). The probe weight `w` CLE steers along tracks
   difference-in-means (~0.85) but is near-ORTHOGONAL to the gradient of log P(refusal) w.r.t. the
@@ -163,8 +163,8 @@ Established 2026-09-03:
 
 Established 2026-09-08:
 
-- **What low/all StrongREJECT scores are made of** (`experiments/low_score_composition.py`,
-  `experiments/score_composition.py`, stdlib-only, post-hoc on the eval JSONs). The reward-hacking
+- **What low/all StrongREJECT scores are made of** (`experiments/judges/low_score_composition.py`,
+  `experiments/judges/score_composition.py`, stdlib-only, post-hoc on the eval JSONs). The reward-hacking
   characterisation for the team. A 5-bucket cross of the two judges over every response (HarmBench
   binary x StrongREJECT-local cut at 0.5 == rubric 3, refusal-string pulled out first):
   AGREE_pos, AGREE_neg, Refused, HB>SR (HarmBench over-counts broken over-steer), SR>HB (HarmBench
@@ -203,7 +203,7 @@ Established 2026-09-10:
 ## 4. Immediate next steps (in the order I would do them)
 
 -1. **NEXT SESSION (user's stated priority): the gradient of log P(refusal) w.r.t. activations.**
-   The scaffold exists -- `experiments/refusal_gradient_alignment.py` (aggregate + per-prompt),
+   The scaffold exists -- `experiments/refusal_direction/refusal_gradient_alignment.py` (aggregate + per-prompt),
    `refusal_gradient_walkthrough.py` (print-everything + finite-difference), `plot_refusal_alignment.py`.
    Rebuild the env first (RESUME S1; the pod comes back with only torch surviving). Open threads on
    this: write the refusal-gradient section into RESULTS_SUMMARY, make the harmful-vs-harmless
@@ -219,8 +219,8 @@ Established 2026-09-10:
 1. **Re-run fluency under constrained scoring** so those numbers are trustworthy, and fix the
    distribution columns in `experiments/results/truthfulqa_fluency/README.md`:
    ```bash
-   python experiments/truthfulqa_fluency.py --method clep    # ~1.5h
-   python experiments/truthfulqa_fluency.py --method clea
+   python experiments/coherence/truthfulqa_fluency.py --method clep    # ~1.5h
+   python experiments/coherence/truthfulqa_fluency.py --method clea
    ```
 2. **Free-form TruthfulQA for the chosen CLE-P\* gate** (generation ~30 min + judge ~1.5h each,
    so pick one gate rather than sweeping):
@@ -229,7 +229,7 @@ Established 2026-09-10:
      --layer_margins 1.08,1.08,1.1,1.11,1.12,1.14,1.14 --gate_c=-0.5m \
      --dataset truthfulqa --max_new_tokens 512 --batch_size 16 \
      --out_dir ./completions/llama3-8b/cle-p-star
-   python experiments/truthfulqa_fluency.py --method clepstar --gate_c=-0.5m
+   python experiments/coherence/truthfulqa_fluency.py --method clepstar --gate_c=-0.5m
    ```
 3. **The two open threads from the very first review**, neither started:
    - *Cross-model ablation.* Only llama3-8b has trained probes; `dataset/splits/` has 15 models.
@@ -251,7 +251,7 @@ Established 2026-09-10:
 - **Results do not travel with `git push`.** `completions/` is a symlink to
   `repo-backup/completions`, outside the repo, and git tracks zero entries under it. Completions
   and evaluation JSONs live only on the volume. `experiments/results/` IS tracked and does push.
-- **`experiments/harmless_mean_schedule.py` is broken on its defaults.** `--reps_dir` falls back
+- **`experiments/cle_core/harmless_mean_schedule.py` is broken on its defaults.** `--reps_dir` falls back
   to `dataset/representations/llama3-8b/train_svm`, which holds the `svm_layer*.pt` probes but no
   `HFx_train.pt`/`HLx_train.pt`. Those tensors only exist at the doubly-nested
   `dataset/representations/representations/...` path and in `repo-backup/`. Regenerating hlmean

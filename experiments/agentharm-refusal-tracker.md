@@ -152,7 +152,7 @@ Separation (AUC of `w·h`, bias-invariant) vs Arditi ceiling:
 
 30 distinct harmful behaviors. Two passes, joined by id: **Pass 1** first-turn probe read
 (`tool_choice="none"`), **Pass 2** full multi-step tool loop (`tool_choice="auto"`, message_limit 12),
-compliance = "agent called a harmful **target** tool". Script: `experiments/multistep_dissociation.py`;
+compliance = "agent called a harmful **target** tool". Script: `experiments/agentharm/multistep_dissociation.py`;
 logs `logs_multi/2026-07-22T01-03*` (probe), `…01-04*` (behaviour).
 
 **Headline — behaviour/representation dissociation, confirmed:**
@@ -188,7 +188,7 @@ graded-successful harm); probe read at first-turn prompt (pre-action). Multi-tur
 
 44 distinct public harmful behaviors (one variant each). Pass 1 first-turn probe (`tool_choice="none"`); Pass 2 full
 multi-step loop with AgentHarm's **real** `combined_scorer` (per-behavior grading functions + gpt-4o
-refusal judge). 2000× bootstrap over behaviors. Script `experiments/full_run_graded.py`; data
+refusal judge). 2000× bootstrap over behaviors. Script `experiments/agentharm/full_run_graded.py`; data
 `experiments/results/results_full.json`; plots `experiments/results/m3_overview.png`; logs
 `experiments/inspect_logs/logs_full/`.
 
@@ -217,7 +217,7 @@ Probe magnitude: mean L18 refused **+1.01** / not-refused **+0.32**; good-fire r
 
 The correct-power rerun: **all 176 `test_public` rows** (44 behaviors × 4 augmentations), same two-pass
 design, CIs from a **behavior-clustered bootstrap** (5000×; resample the 44 behaviors, pool their rows —
-no pseudo-replication). Supersedes M2d. Script `experiments/full_run_graded.py`; plot regenerated.
+no pseudo-replication). Supersedes M2d. Script `experiments/agentharm/full_run_graded.py`; plot regenerated.
 
 | Metric | Point | 95% CI (clustered) |
 |--------|-------|--------------------|

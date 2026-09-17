@@ -1,6 +1,6 @@
 # CLE-P margins: jailbreak vs coherence tradeoff (summary)
 
-Combined view of the two evals. `asr_vs_coherence.png` (from `experiments/plot_clep_tradeoff.py`).
+Combined view of the two evals. `asr_vs_coherence.png` (from `experiments/cle_core/plot_clep_tradeoff.py`).
 
 | margins | HarmBench ASR ↑ | TruthfulQA MC2 ↑ | MC1 |
 | --- | --- | --- | --- |

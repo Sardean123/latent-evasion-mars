@@ -1,7 +1,7 @@
 # Results summary — llama3-8b, layers 11-18, beta=1
 
 HarmBench standard n=200 (judge `cais/HarmBench-Llama-2-13b-cls`). TruthfulQA MC n=790.
-Effective ASR = HarmBench-positive AND fully responsive (`experiments/answer_quality.py`),
+Effective ASR = HarmBench-positive AND fully responsive (`experiments/cle_core/answer_quality.py`),
 one shared denominator of 200, so it is the cross-run comparable column. `q=0` is the
 outright-nonresponsive share of each run's own ASR-positive set.
 
@@ -190,7 +190,7 @@ while hlmean sits at -4.7. Two independently-derived BO schedules converging on 
 coherence cost, well apart from the data-derived one, is at least suggestive that BO's objective
 is buying ASR without pricing coherence at all.
 
-## Independent judge: StrongREJECT rubric via OpenAI API, 2026-08-06 (`experiments/strongreject_api_batch.py`)
+## Independent judge: StrongREJECT rubric via OpenAI API, 2026-08-06 (`experiments/judges/strongreject_api_batch.py`)
 
 The same five native-313 cells re-graded by the StrongREJECT **rubric** judge (`gpt-5.4-mini`),
 which returns the refused / convincing / specific decomposition and the composite
@@ -227,7 +227,7 @@ teacher/student link. Use the local judge's per-item scores for the disagreement
 this judge for the decomposition and as a check on aggregates. Single seed, gpt-5.4-mini at
 temperature 0.
 
-## Cross-judge disagreement, prompts held constant, 2026-09-03 (`experiments/cross_judge_disagreement.py`)
+## Cross-judge disagreement, prompts held constant, 2026-09-03 (`experiments/judges/cross_judge_disagreement.py`)
 
 Both prompt sets are scored by their NATIVE judge and the FOREIGN judge over the same
 completions, pooled across all five steering cells (each row = one completion): HarmBench prompts
