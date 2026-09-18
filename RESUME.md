@@ -200,6 +200,32 @@ Established 2026-09-10:
   characterise WHAT the stable non-probe direction is (project out w, inspect the remainder); write a
   refusal-gradient section into RESULTS_SUMMARY.
 
+Established 2026-09-18:
+
+- **Refusal unlearning: weight-level SFT DOES ride the probe axis** (unlike the gradient/descent).
+  `experiments/refusal_unlearn/`. Pipeline: (1) `generate_rollouts.py` -- teacher
+  `huihui-ai/DeepSeek-R1-Distill-Llama-8B-abliterated` (Llama-3.1-based, a REASONING model:
+  emits <think>...</think>), 4 rollouts each on the 124 probe-training harmful prompts
+  (`dataset/splits/llama3-8b/harmful_train_filtered.json`), 496 rollouts, `<think>` stripped ->
+  491 pairs; (2) `sft_unlearn.py` -- LoRA (r16/a32, q/k/v/o/gate/up/down, 3 epochs, lr 2e-4,
+  prompt tokens masked) on our **Meta-Llama-3-8B-Instruct** (NOTE: the repo base is Llama-3.0,
+  NOT 3.1); (3) `measure_diff.py` -- adapter-on vs `disable_adapter()`(=base) on held-out
+  harmbench_standard. Behaviour: refusal 97% -> 0%. `cos(mean(h_SFT - h_base) @ last prompt tok,
+  probe w)` = -0.28 -> -0.58 over L11-17 (negative = toward harmless/comply, -w), vs ~0 for the
+  local gradient and the activation descent -- so the probe is the axis the refusal MECHANISM sits
+  on representationally; local activation moves dodge it, weight-tuning rides it.
+- **Harmless-SFT control** (same pipeline, 126 harmless split prompts -> 502 pairs): aligns too but
+  weaker (-0.07 -> -0.38) AND also drops refusal to 9% (general compliance drift, not refusal-
+  neutral). Refusal-specific component (harmful - harmless) ~ -0.2 across the window. Figure:
+  `experiments/results/refusal_gradient/direction_comparison.png` (4 directions vs probe).
+  JSONs: `unlearn_diff.json`, `unlearn_diff_harmless.json`. Rollouts + LoRA adapters gitignored
+  under `model_outputs/refusal_unlearn/`.
+- **DISK NOTE:** deleted the cached HarmBench-13B judge (25 GB) to fit the R1 model (~15 GB); to
+  score any model's HarmBench ASR again, re-download it (~10 min). Volume was ~22 GB after.
+- Open next steps here: a cleaner refusal-neutral control (an SFT that provably doesn't change
+  refusal); more held-out sets / seeds; the LoRA weight-vs-probe comparison (project the LoRA
+  update into activation space).
+
 ## 4. Immediate next steps (in the order I would do them)
 
 -1. **NEXT SESSION (user's stated priority): the gradient of log P(refusal) w.r.t. activations.**
